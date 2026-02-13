@@ -1,0 +1,13 @@
+# Generic ignores for `Git_info`
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log

@@ -1,0 +1,6 @@
+{
+    "name": "Git Branch Info & Recovery (with SQLite History)",
+    "description": "Aplicación de escritorio para inspeccionar y recuperar ramas Git y registrar historial en SQLite",
+    "version": "V26.02.014",
+    "owner": "Mrubiodev"
+}

@@ -7,11 +7,22 @@ import subprocess
 import sqlite3
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+#################PROYECTO##################
+__proyect__    = 'Git Branch Info & Recovery (with SQLite History)'
+__author__     = "Mario Rubio"
+__copyright__  = "Copyright 2022, The MRubioDev Project"
+__credits__    = ["Mario Rubio"]
+__license__    = "GPL"
+__version__    = "V26.02.014"
+__maintainer__ = "Mario Rubio"
+__email__      = "https://mrubiodev.com/"
+__status__     = "Development" #"Prototype", "Development", or "Production"
+
 
 class GitBranchInfoApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Git Branch Info & Recovery (with SQLite History)")
+        self.root.title(f"{__proyect__} - v{__version__} by {__author__}")
         self.root.geometry("1400x900")
 
         self.db_path = "git_branches.db" # Nombre de la base de datos SQLite
