@@ -1,6 +1,14 @@
 {
     "name": "Git Branch Info & Recovery (with SQLite History)",
-    "description": "Aplicación de escritorio para inspeccionar y recuperar ramas Git y registrar historial en SQLite",
+    "description": "Aplicación de escritorio para inspeccionar y recuperar ramas Git y registrar historial en SQLite.",
     "version": "V26.02.014",
-    "owner": "Mrubiodev"
+    "owner": "Mario Rubio Avila",
+    "maintainer": "Mario Rubio",
+    "entry_point": "Git_info_Tools.exe",
+    "python_requires": ">=3.8",
+    "dependencies": ["GitPython", "gitdb", "openpyxl"],
+    "known_issues": [],
+    "fixed_issues": [],
+    "notes": "Herramienta de inspección Git con persistencia en SQLite.",
+    "url": "https://github.com/mrubiodev/Git_info_Tools"
 }
