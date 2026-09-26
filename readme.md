@@ -1,6 +1,12 @@
 
 # Git Branch Info & Recovery
 
+![Status](https://img.shields.io/badge/status-Public-2ea44f)  
+![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)  
+![Tkinter](https://img.shields.io/badge/GUI-Tkinter-444444)  
+![GitPython](https://img.shields.io/badge/Git-GitPython-F05032?logo=git&logoColor=white)  
+![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)
+
 Descripción
 -----------
 Esta aplicación de escritorio (Tkinter) ayuda a inspeccionar y recuperar ramas de repositorios Git locales. Escanea un repositorio, recopila información de ramas (locales y remotas), busca ramas recuperables en el reflog, y mantiene un historial en una base de datos SQLite para búsquedas, auditoría y recuperación posterior.
