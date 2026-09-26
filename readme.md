@@ -1,68 +1,56 @@
-
 # Git Branch Info & Recovery
 
-![Status](https://img.shields.io/badge/status-Public-2ea44f)  
-![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)  
-![Tkinter](https://img.shields.io/badge/GUI-Tkinter-444444)  
-![GitPython](https://img.shields.io/badge/Git-GitPython-F05032?logo=git&logoColor=white)  
-![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)
+![Estado](https://img.shields.io/badge/estado-En%20desarrollo-yellow)
+![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
+![Tkinter](https://img.shields.io/badge/Interfaz-Tkinter-444444)
+![GitPython](https://img.shields.io/badge/Git-GitPython-F05032?logo=git&logoColor=white)
+![SQLite](https://img.shields.io/badge/Base%20de%20datos-SQLite-003B57?logo=sqlite&logoColor=white)
+![Excel](https://img.shields.io/badge/Exportación-XLSX-217346?logo=microsoftexcel&logoColor=white)
 
-Descripción
------------
-Esta aplicación de escritorio (Tkinter) ayuda a inspeccionar y recuperar ramas de repositorios Git locales. Escanea un repositorio, recopila información de ramas (locales y remotas), busca ramas recuperables en el reflog, y mantiene un historial en una base de datos SQLite para búsquedas, auditoría y recuperación posterior.
+Aplicación de escritorio para consultar referencias de ramas remotas de un repositorio Git, buscar candidatos a ramas perdidas en el reflog local y guardar los resultados en una base SQLite. Versión del código: **V26.02.014**.
 
-Principales características
---------------------------
-- Interfaz gráfica con `Tkinter` para seleccionar repositorios y ver resultados.
-- Obtención de ramas remotas y locales con detalles de último commit (hash, autor, fecha, mensaje).
-- Detección de ramas potencialmente recuperables usando el `reflog`.
-- Registro/actualización de la información en una base de datos SQLite (`git_branches.db`).
-- Búsqueda interactiva y filtros por rama, repositorio y archivos modificados.
-- Búsqueda en lote (pegar múltiples nombres de ramas o archivos).
-- Exportación de resultados a Excel (`openpyxl`).
-- Copiar filas/selecciones y ver detalles de commits desde la GUI.
+## Funciones
 
-Archivos importantes
--------------------
-- `CreateEnv.bat` — (opcional) script de creación/ajuste de entorno en Windows.
-- `main.py` — aplicación principal (interfaz y lógica). Ejecuta la GUI y usa `gitpython`, `openpyxl` y `sqlite3`.
+- Actualiza los remotos configurados y consulta las ramas de seguimiento del remoto predeterminado.
+- Muestra el último commit de cada rama: hash, fecha, autor y mensaje.
+- Calcula los ficheros modificados en ese commit y muestra hasta diez rutas.
+- Analiza el reflog local para encontrar nombres y commits que podrían corresponder a ramas eliminadas.
+- Guarda y actualiza los resultados en `git_branches.db`.
+- Busca en los registros por nombre de rama, ruta del repositorio o fichero; incluye búsqueda por lotes de ramas o ficheros.
+- Copia filas y exporta resultados a Excel.
 
-Requisitos
----------
-- Python 3.8 o superior.
-- Dependencias Python (puedes instalarlas manualmente si `CreateEnv.bat` no lo hace):
+## Recuperación: cómo funciona
 
-```powershell
-pip install gitpython openpyxl
-```
+La aplicación **no recrea ni cambia ramas automáticamente**. Para cada candidato encontrado en el reflog muestra los comandos `git branch` y `git checkout` que puedes revisar y ejecutar manualmente.
 
-Uso (Windows)
--------------
-1. Abre PowerShell o CMD en la carpeta del proyecto.
-2. (Opcional) Ejecuta `CreateEnv.bat` si quieres que prepare el entorno.
+La detección depende de que el reflog y los objetos de commit sigan disponibles en el repositorio local. Un candidato es una sugerencia que conviene verificar antes de usar.
 
-```powershell
-.\CreateEnv.bat
-```
+## Uso
 
-3. Ejecuta la aplicación:
+Requisitos: Python 3.8 o posterior, Git instalado y disponible en el `PATH`, y Tkinter. Está preparado principalmente para uso de escritorio en Windows.
 
-```powershell
+~~~powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python main.py
-```
+~~~
 
-Comportamiento y salida
------------------------
-- La aplicación crea/usa la base de datos `git_branches.db` en la carpeta del proyecto para almacenar el historial de ramas.
-- Permite exportar resultados a un archivo Excel cuando se solicita.
-- Revisa la consola dentro de la aplicación para mensajes y progreso.
+También se puede usar `CreateEnv.bat`, pero **si ya existe, elimina y vuelve a crear la carpeta `.venv`**. Usa los comandos manuales si quieres conservar ese entorno.
 
-Notas de seguridad y buenas prácticas
------------------------------------
-- Revisa el contenido de `CreateEnv.bat` antes de ejecutarlo.
-- Ejecuta la aplicación en un entorno virtual si lo deseas para aislar dependencias.
+## Qué ocurre al analizar un repositorio
 
-Contacto
--------
-Si quieres mejoras (por ejemplo, integración con servicios remotos o automatizaciones), abre un issue o comparte detalles del cambio deseado.
+La aplicación ejecuta un `fetch --prune` para cada remoto configurado y luego lista las referencias del remoto predeterminado. Esto necesita acceso de red y actualiza/prunea las referencias remotas locales obsoletas del repositorio analizado; no borra ramas del servidor remoto.
 
+La base de datos `git_branches.db` se crea en el directorio de trabajo desde el que se inicia la aplicación. Mantiene una fila por repositorio, nombre y tipo de rama, y actualiza los datos del último commit detectado. No es un historial completo de todos los commits.
+
+La base almacena rutas locales, nombres de rama, hashes, autores, mensajes y nombres de ficheros modificados. Revísala antes de compartirla.
+
+## Dependencias principales
+
+- GitPython para consultar Git y sus remotos.
+- Tkinter para la interfaz gráfica.
+- SQLite (`sqlite3`) para el registro local.
+- openpyxl para exportar a Excel.
+
+~~~
