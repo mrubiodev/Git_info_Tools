@@ -39,7 +39,9 @@ def scan_job(params, progress, cancel):
             warning = f"fetch falló, se usan las referencias locales: {e}"
     results, branches = latest_scan.scan_latest(
         params["repo_path"], params["scope"], params["path_regex"], params["branch_regex"],
-        params["ignore_case"], progress=progress, cancel=cancel)
+        params["ignore_case"], progress=progress, cancel=cancel,
+        db_path=params.get("db_path"), parallel=params.get("parallel", False),
+        max_workers=params.get("workers", 4))
     return results, branches, warning
 
 
@@ -208,6 +210,9 @@ class LatestFilesTab:
             "branch_regex": self.entry_branch_regex.get().strip(),
             "ignore_case": self.icase_var.get(),
             "fetch": self.fetch_var.get(),
+            "db_path": getattr(self.app, 'db_path', None),
+            "parallel": getattr(self.app, 'parallel_var', tk.BooleanVar(value=False)).get(),
+            "workers": getattr(self.app, 'workers_var', tk.IntVar(value=4)).get(),
         }
 
     def scan(self, mark=None):

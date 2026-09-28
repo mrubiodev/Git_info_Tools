@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from ..core.formatting import format_branch_details, repo_short_name, status_text, truncate, type_short
-from .widgets import ScrolledTree, attach_context_menu, copy_rows, export_rows_dialog, show_text_window
+from .widgets import ScrolledTree, attach_context_menu, copy_rows, export_rows_dialog, show_text_window, ToolTip
 
 HEADERS = ["ID", "Repositorio", "Rama", "Tipo", "Hash", "Fecha Commit",
            "Autor", "Mensaje", "Archivos Modificados", "Estado"]
@@ -55,10 +55,17 @@ class SearchTab:
             row=0, column=0, columnspan=4, pady=(0, 10), sticky="w")
         self.entry_search_branch = self._labeled_entry(controls, "Rama:", 1)
         self.entry_search_path = self._labeled_entry(controls, "Repositorio:", 2)
-        self.entry_search_file = self._labeled_entry(controls, "Archivo:", 3)
+        self.entry_search_folder = self._labeled_entry(controls, "Carpeta:", 3)
+        self.entry_search_file = self._labeled_entry(controls, "Archivo:", 4)
+
+        # Tooltips para ayudar al usuario
+        ToolTip(self.entry_search_branch, "Nombre o regex de la rama (p.ej. ^feature/)")
+        ToolTip(self.entry_search_path, "Texto que aparece en el campo 'repo_path' (ruta o parte de ella)")
+        ToolTip(self.entry_search_folder, "Carpeta dentro del repositorio para filtrar ficheros (p.ej. src/utils)")
+        ToolTip(self.entry_search_file, "Nombre, patrón o 're:...' para regex (p.ej. re:.*\\.py$)")
 
         buttons = tk.Frame(controls)
-        buttons.grid(row=4, column=0, columnspan=2, pady=10)
+        buttons.grid(row=5, column=0, columnspan=2, pady=10)
         for text, command in (("Buscar", self.perform_search), ("Limpiar Filtros", self.clear_search),
                               ("Ver Todos", self.view_all_records), ("Exportar Excel", self.export_to_excel),
                               ("Copiar Selección", self.copy_selection)):
@@ -74,7 +81,14 @@ class SearchTab:
     def perform_search(self):
         branch_name = self.entry_search_branch.get().strip()
         repo_path = self.entry_search_path.get().strip()
+        folder = self.entry_search_folder.get().strip()
         file_name = self.entry_search_file.get().strip()
+        # Combina carpeta y fichero si se especifica carpeta
+        if folder:
+            if file_name:
+                file_name = folder.rstrip('/') + '/' + file_name
+            else:
+                file_name = folder.rstrip('/') + '/'
         if not branch_name and not repo_path and not file_name:
             messagebox.showwarning("Advertencia", "Por favor, ingresa al menos un criterio de búsqueda.")
             return
@@ -97,7 +111,7 @@ class SearchTab:
             self.app.log(f"Error al cargar registros: {e}")
 
     def clear_search(self):
-        for entry in (self.entry_search_branch, self.entry_search_path, self.entry_search_file):
+        for entry in (self.entry_search_branch, self.entry_search_path, self.entry_search_folder, self.entry_search_file):
             entry.delete(0, tk.END)
         self.table.clear()
         self.label_results.config(text="Resultados: 0")
@@ -133,3 +147,11 @@ class SearchTab:
 
     def export_to_excel(self):
         export_rows_dialog(self.table.rows(), "Búsqueda de Ramas", HEADERS, EXCEL_WIDTHS, log=self.app.log)
+
+    def focus_search(self):
+        """Pone el foco en el campo de rama y selecciona la pestaña de búsqueda."""
+        try:
+            self.app.select_tab(self.frame)
+            self.entry_search_branch.focus_set()
+        except Exception:
+            pass

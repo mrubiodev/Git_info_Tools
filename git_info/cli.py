@@ -14,6 +14,10 @@ from . import DEFAULT_DB_PATH
 def build_parser():
     parser = argparse.ArgumentParser(description="Git Branch Info & Recovery")
     parser.add_argument("--db", default=DEFAULT_DB_PATH, help="Ruta de la base de datos SQLite")
+    parser.add_argument("--parallel", action="store_true",
+                        help="Habilita escaneo paralelo (experimental)")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="Número de hilos para escaneo paralelo")
     parser.add_argument("--list", action="store_true", help="Lista las búsquedas guardadas")
     parser.add_argument("--sync", action="append", metavar="NOMBRE_O_ID",
                         help="Ejecuta una búsqueda guardada (se puede repetir)")
@@ -33,12 +37,13 @@ def _list(store):
     return 0
 
 
-def _sync(store, searches, force):
+def _sync(store, searches, force, parallel=False, workers=4):
     from .core.sync import run_saved_search
     exit_code = 0
     for search in searches:
         try:
-            summary = run_saved_search(store, search, force=force, progress=print)
+            summary = run_saved_search(store, search, force=force, progress=print,
+                                       parallel=parallel, max_workers=workers)
             print(f"[{search['name']}] {summary['text']}")
             if summary["errors"]:
                 exit_code = 1
@@ -63,7 +68,7 @@ def run_cli(args):
         searches.append(search)
     if args.sync_all:
         searches += [s for s in store.list() if s["auto_sync"] and s not in searches]
-    return _sync(store, searches, args.force)
+    return _sync(store, searches, args.force, parallel=args.parallel, workers=args.workers)
 
 
 def main(argv=None):

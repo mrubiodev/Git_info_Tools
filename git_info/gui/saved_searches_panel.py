@@ -85,7 +85,11 @@ class SavedSearchesPanel:
         name = search["name"]
         self.app.log(f"[Sincronización '{name}'] iniciada{' (forzada)' if force else ''}...")
         self.running[search["id"]] = self.app.runner.submit(
-            lambda progress, cancel: run_saved_search(self.store, search, force, progress, cancel),
+            lambda progress, cancel: run_saved_search(
+                self.store, search, force, progress, cancel,
+                parallel=getattr(self.app, 'parallel_var', tk.BooleanVar(value=False)).get(),
+                max_workers=getattr(self.app, 'workers_var', tk.IntVar(value=4)).get()
+            ),
             on_success=lambda summary: self._report(name, summary, manual),
             on_error=lambda e: self._failed(name, e, manual),
             on_finally=lambda: self._finished(search["id"]),

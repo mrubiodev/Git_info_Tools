@@ -117,15 +117,44 @@ class BranchStore:
             conn.close()
 
     def search(self, branch_name="", repo_path="", file_name=""):
+        # Fetch rows filtered by branch_name and repo_path via SQL, then apply
+        # file/folder matching in Python to allow substring, folder and regex
+        # patterns (e.g. 're:...'). This keeps SQL simple and enables
+        # folder-specific matches where modified_files is a CSV string.
         query = f"SELECT {', '.join(TABLE_COLUMNS)} FROM branches WHERE 1=1"
         params = []
-        for column, value in (("branch_name", branch_name), ("repo_path", repo_path),
-                              ("modified_files", file_name)):
+        for column, value in (("branch_name", branch_name), ("repo_path", repo_path)):
             if value:
                 query += f" AND {column} LIKE ?"
                 params.append(f"%{value}%")
         query += " ORDER BY commit_date DESC"
-        return self._fetchall(query, params)
+        rows = self._fetchall(query, params)
+
+        if not file_name:
+            return rows
+
+        # index of the modified_files column in the SELECT
+        try:
+            modified_idx = TABLE_COLUMNS.index('modified_files')
+        except ValueError:
+            # Fallback: last-but-one based on known schema
+            modified_idx = 8
+
+        # If pattern starts with 're:' treat as regex (Python re.search)
+        if file_name.startswith('re:'):
+            import re
+            pattern = file_name[3:]
+            try:
+                rx = re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                # Invalid regex -> no results
+                return []
+            return [r for r in rows if rx.search(r[modified_idx] or '')]
+
+        # Otherwise do a simple substring match; this supports folder/paths
+        # by passing e.g. 'src/utils/' or 'src/utils/file.py' from the UI.
+        needle = file_name
+        return [r for r in rows if needle in (r[modified_idx] or '')]
 
     def all(self):
         return self._fetchall(f"SELECT {', '.join(TABLE_COLUMNS)} FROM branches ORDER BY commit_date DESC")

@@ -2,6 +2,7 @@
 import subprocess
 
 from . import exporter, latest_scan
+from .repo_cache import RepoCache
 from .gitcmd import GitError, fetch_all
 from .saved_searches import is_due, now_text
 
@@ -17,20 +18,20 @@ def _with_warnings(text, warnings):
     return text + (" (" + "; ".join(warnings) + ")" if warnings else "")
 
 
-def run_saved_search(store, search, force=False, progress=None, cancel=None):
+def run_saved_search(store, search, force=False, progress=None, cancel=None, parallel=False, max_workers=4):
     """Ejecuta una búsqueda guardada y registra el resultado en `store`.
 
     Sin `force`, si las ramas no han cambiado desde la última ejecución
     correcta no se vuelve a escanear ni a descargar nada.
     """
     try:
-        return _run(store, search, force, progress, cancel)
+        return _run(store, search, force, progress, cancel, parallel, max_workers)
     except Exception as e:
         store.update(search["id"], last_run=now_text(), last_result=f"Error: {e}")
         raise
 
 
-def _run(store, search, force, progress, cancel):
+def _run(store, search, force, progress, cancel, parallel=False, max_workers=4):
     repo = search["repo_path"]
     warnings = []
     if search["fetch_before"]:
@@ -41,7 +42,11 @@ def _run(store, search, force, progress, cancel):
         except (GitError, subprocess.TimeoutExpired) as e:
             warnings.append(f"fetch falló, se usan las referencias locales: {e}")
 
-    branches = latest_scan.list_branches(repo, search["scope"], search["branch_regex"], search["ignore_case"])
+    # Prefer cached branch list when we are not explicitly fetching first.
+    # If fetch_before is True we just did a fetch and should not use the cache.
+    use_cache = not search.get("fetch_before", True)
+    branches = latest_scan.list_branches(repo, search["scope"], search["branch_regex"],
+                                         search["ignore_case"], db_path=store.db_path, use_cache=use_cache)
     signature = latest_scan.refs_signature(branches)
 
     if not force and signature == search.get("refs_signature"):
@@ -51,7 +56,8 @@ def _run(store, search, force, progress, cancel):
 
     results, _ = latest_scan.scan_latest(repo, search["scope"], search["path_regex"],
                                          search["branch_regex"], search["ignore_case"],
-                                         progress=progress, cancel=cancel, branches=branches)
+                                         progress=progress, cancel=cancel, branches=branches,
+                                         db_path=store.db_path, parallel=parallel, max_workers=max_workers)
     missing = []
     if search["selected_paths"] is not None:
         wanted = set(search["selected_paths"])

@@ -141,3 +141,66 @@ def browse_into(entry, **options):
         entry.delete(0, tk.END)
         entry.insert(0, directory)
     return directory
+
+
+class ToolTip:
+    """Simple tooltip para widgets Tkinter.
+
+    Uso: ToolTip(widget, "Texto del tooltip")
+    """
+    def __init__(self, widget, text, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._id = None
+        self.tipwindow = None
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Leave>", self._leave, add="+")
+        widget.bind("<ButtonPress>", self._leave, add="+")
+
+    def _enter(self, event=None):
+        self._schedule()
+
+    def _leave(self, event=None):
+        self._unschedule()
+        self._hide_tip()
+
+    def _schedule(self):
+        self._unschedule()
+        try:
+            self._id = self.widget.after(self.delay, self._show_tip)
+        except Exception:
+            self._id = None
+
+    def _unschedule(self):
+        if self._id:
+            try:
+                self.widget.after_cancel(self._id)
+            except Exception:
+                pass
+            self._id = None
+
+    def _show_tip(self):
+        if self.tipwindow or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+            tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(1)
+            tw.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(tw, text=self.text, justify=tk.LEFT, bg="#ffffe0",
+                             relief=tk.SOLID, borderwidth=1, font=("tahoma", "8", "normal"))
+            label.pack(ipadx=4, ipady=2)
+            self.tipwindow = tw
+        except Exception:
+            self.tipwindow = None
+
+    def _hide_tip(self):
+        tw = self.tipwindow
+        if tw:
+            try:
+                tw.destroy()
+            except Exception:
+                pass
+            self.tipwindow = None
