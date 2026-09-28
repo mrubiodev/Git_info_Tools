@@ -1,6 +1,7 @@
 """Persistencia SQLite de las búsquedas de últimas versiones guardadas."""
 import datetime
 import json
+import os
 import sqlite3
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -22,7 +23,14 @@ class SavedSearchStore:
         self.db_path = db_path
 
     def _connect(self):
-        return sqlite3.connect(self.db_path, timeout=30)
+        # Ensure parent directory exists (the DB path may be inside a
+        # user-local data dir). Expand user (`~`) and create directories
+        # as needed before connecting to avoid "attempt to write a readonly database".
+        db_path = os.path.expanduser(self.db_path)
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+        return sqlite3.connect(db_path, timeout=30)
 
     def _execute(self, query, params=()):
         conn = self._connect()

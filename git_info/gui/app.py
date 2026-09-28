@@ -4,11 +4,26 @@ from tkinter import messagebox, ttk
 
 from git import InvalidGitRepositoryError, NoSuchPathError
 
-from .. import DEFAULT_DB_PATH, __author__, __proyect__, __version__
-from ..core import branch_scanner
-from ..core.branch_store import BranchStore
-from ..core.formatting import format_branch_report
-from ..core.saved_searches import SavedSearchStore
+# Prefer package-relative imports, but allow running this file directly as a script.
+try:
+    from .. import DEFAULT_DB_PATH, __author__, __proyect__, __version__
+    from ..core import branch_scanner
+    from ..core.branch_store import BranchStore
+    from ..core.formatting import format_branch_report
+    from ..core.saved_searches import SavedSearchStore
+except Exception:
+    # Running as a script (python git_info/gui/app.py) can make relative imports fail.
+    # Insert the repo root into sys.path and use absolute imports as a fallback.
+    import os, sys
+    _this_dir = os.path.dirname(__file__)
+    _repo_root = os.path.abspath(os.path.join(_this_dir, "..", ".."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from git_info import DEFAULT_DB_PATH, __author__, __proyect__, __version__
+    from git_info.core import branch_scanner
+    from git_info.core.branch_store import BranchStore
+    from git_info.core.formatting import format_branch_report
+    from git_info.core.saved_searches import SavedSearchStore
 from .background import BackgroundRunner
 from .batch_tab import BatchTab
 from .console_tab import ConsoleTab, FetchProgress
