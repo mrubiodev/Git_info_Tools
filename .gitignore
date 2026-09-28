@@ -16,5 +16,9 @@ desktop.ini
 build/
 dist/
 
+# Python
+__pycache__/
+*.pyc
+
 # Database files
 *.db

@@ -18,6 +18,53 @@ Aplicación de escritorio para consultar referencias de ramas remotas de un repo
 - Guarda y actualiza los resultados en `git_branches.db`.
 - Busca en los registros por nombre de rama, ruta del repositorio o fichero; incluye búsqueda por lotes de ramas o ficheros.
 - Copia filas y exporta resultados a Excel.
+- **Últimas versiones**: localiza, entre todas las ramas, dónde está la versión más reciente de cada fichero, la lista y la descarga a una carpeta local; permite guardar búsquedas y sincronizarlas automáticamente.
+
+## Últimas versiones de ficheros entre ramas
+
+En la pestaña **Últimas versiones**:
+
+1. Elige el ámbito (ramas remotas, locales o todas) y, opcionalmente, una expresión regular para las rutas de fichero (por ejemplo, `\.py$` o `^src/.*\.(cs|xml)$`) y otra para los nombres de rama.
+2. **Escanear ramas** muestra cada fichero con la rama en la que se modificó más recientemente (según la fecha del último commit que lo tocó), el commit, el autor, las ramas donde el contenido es idéntico y en cuántas ramas existe.
+3. Marca ficheros haciendo clic en `☐`, con la tecla Espacio, con **Marcar por regex** o con **Marcar todo**.
+4. **Descargar marcados** o **Descargar todos** copia esa versión a la carpeta destino, con la misma estructura que el repositorio o con una subcarpeta por rama. El listado también se puede exportar a Excel.
+5. **Guardar búsqueda...** almacena el filtro completo (incluye ficheros que aparezcan después) o solo los ficheros marcados, y opcionalmente activa la descarga automática cada N minutos.
+
+La sincronización ejecuta `git fetch --all --prune`, compara las puntas de las ramas con la ejecución anterior y solo escanea y descarga si algo cambió. En la carpeta destino se guarda `.git_latest_manifest.json` para descargar únicamente los ficheros que cambian. Los ficheros modificados localmente no se sobrescriben salvo que se active esa opción. Se copia el contenido tal cual está en Git, sin filtros de fin de línea ni LFS.
+
+La descarga automática funciona mientras la aplicación está abierta. Para ejecutarla sin abrir la interfaz, por ejemplo desde el Programador de tareas de Windows:
+
+~~~powershell
+python main.py --list                 # búsquedas guardadas
+python main.py --sync "Mi búsqueda"   # una búsqueda (nombre o id)
+python main.py --sync-all             # todas las que tienen descarga automática
+python main.py --sync-all --force     # sin comprobar si las ramas cambiaron
+python main.py --db C:\ruta\git_branches.db --sync-all
+~~~
+
+Si se ejecuta desde otra carpeta, indica `--db` con la misma base de datos que usa la interfaz.
+
+## Estructura del código
+
+~~~text
+main.py                  Punto de entrada (GUI o CLI)
+git_info/cli.py          Argumentos de línea de comandos y sincronización sin interfaz
+git_info/core/           Lógica de la aplicación, sin Tkinter
+  gitcmd.py              Ejecución de git y utilidades comunes
+  commit_info.py         Datos de commits (GitPython)
+  branch_scanner.py      Ramas remotas y candidatas recuperables del reflog
+  branch_store.py        Historial SQLite de ramas y consultas
+  formatting.py          Textos de informes y detalles
+  excel.py               Exportación genérica a XLSX
+  latest_scan.py         Última versión de cada fichero entre ramas
+  exporter.py            Descarga a carpeta local y manifiesto
+  saved_searches.py      Búsquedas guardadas (SQLite)
+  sync.py                Ejecución y detección de cambios de búsquedas guardadas
+git_info/gui/            Interfaz Tkinter
+  app.py                 Ventana principal
+  console_tab.py, search_tab.py, batch_tab.py, latest_tab.py   Pestañas
+  saved_searches_panel.py, dialogs.py, widgets.py, background.py  Componentes reutilizables
+~~~
 
 ## Recuperación: cómo funciona
 
@@ -44,7 +91,7 @@ La aplicación ejecuta un `fetch --prune` para cada remoto configurado y luego l
 
 La base de datos `git_branches.db` se crea en el directorio de trabajo desde el que se inicia la aplicación. Mantiene una fila por repositorio, nombre y tipo de rama, y actualiza los datos del último commit detectado. No es un historial completo de todos los commits.
 
-La base almacena rutas locales, nombres de rama, hashes, autores, mensajes y nombres de ficheros modificados. Revísala antes de compartirla.
+La base almacena rutas locales, nombres de rama, hashes, autores, mensajes y nombres de ficheros modificados, además de las búsquedas guardadas (tabla `saved_searches`). Revísala antes de compartirla.
 
 ## Dependencias principales
 

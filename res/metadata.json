@@ -1,7 +1,7 @@
 {
     "name": "Git Branch Info & Recovery (with SQLite History)",
     "description": "Aplicación de escritorio para inspeccionar y recuperar ramas Git y registrar historial en SQLite.",
-    "version": "V26.02.014",
+    "version": "V26.09.26",
     "owner": "Mario Rubio Avila",
     "maintainer": "Mario Rubio",
     "entry_point": "Git_info_Tools.exe",
