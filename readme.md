@@ -1,11 +1,15 @@
 # Git Branch Info & Recovery
 
+> Aplicación de escritorio para consultar ramas remotas de Git y sugerir la recuperación manual de referencias perdidas.
+
 ![Estado](https://img.shields.io/badge/estado-En%20desarrollo-yellow)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Tkinter](https://img.shields.io/badge/Interfaz-Tkinter-444444)
 ![GitPython](https://img.shields.io/badge/Git-GitPython-F05032?logo=git&logoColor=white)
 ![SQLite](https://img.shields.io/badge/Base%20de%20datos-SQLite-003B57?logo=sqlite&logoColor=white)
 ![Excel](https://img.shields.io/badge/Exportación-XLSX-217346?logo=microsoftexcel&logoColor=white)
+
+## Resumen
 
 Aplicación de escritorio para consultar referencias de ramas remotas de un repositorio Git, buscar candidatos a ramas perdidas en el reflog local y guardar los resultados en una base SQLite. Versión del código: **V26.02.014**.
 
