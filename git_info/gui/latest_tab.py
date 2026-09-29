@@ -12,7 +12,8 @@ from ..core import exporter, latest_scan
 from ..core.gitcmd import Cancelled, GitError, compile_regex, fetch_all
 from .dialogs import SAVE_SELECTION, SaveSearchDialog
 from .saved_searches_panel import SavedSearchesPanel
-from .widgets import ScrolledTree, attach_context_menu, browse_into, copy_rows, export_rows_dialog
+from .widgets import (ScrolledTree, ToolTip, attach_context_menu, browse_into, copy_rows,
+                      export_rows_dialog, show_text_window)
 
 CHECKED, UNCHECKED = "☑", "☐"
 MARK_ALL = object()
@@ -20,12 +21,11 @@ SCOPE_LABELS = {"Remotas": latest_scan.SCOPE_REMOTE, "Locales": latest_scan.SCOP
                 "Todas": latest_scan.SCOPE_ALL}
 SCOPE_BY_VALUE = {v: k for k, v in SCOPE_LABELS.items()}
 
-COLUMNS = [("sel", CHECKED, 34, "center"), ("path", "Fichero", 360), ("branch", "Rama más reciente", 200),
-           ("date", "Fecha", 130), ("commit", "Commit", 80), ("author", "Autor", 120),
-           ("message", "Mensaje", 220), ("same", "Idéntico en", 200), ("count", "Nº ramas", 70, "center")]
-HEADERS = ["Fichero", "Rama más reciente", "Fecha", "Commit", "Autor", "Mensaje",
+COLUMNS = [("sel", CHECKED, 38, "center"), ("path", "Fichero", 520),
+           ("branch", "Rama más reciente", 230), ("status", "Estado local", 190)]
+HEADERS = ["Fichero", "Rama más reciente", "Estado local", "Fecha", "Commit", "Autor", "Mensaje",
            "Idéntico en", "Nº ramas con el fichero", "Marcado"]
-EXCEL_WIDTHS = [60, 30, 18, 42, 20, 40, 40, 12, 10]
+EXCEL_WIDTHS = [60, 30, 24, 18, 42, 20, 40, 40, 12, 10]
 
 
 def scan_job(params, progress, cancel):
@@ -52,17 +52,22 @@ class LatestFilesTab:
         self.results = []
         self.entries = {}          # iid -> resultado
         self.checked = set()       # rutas marcadas
+        self.local_statuses = {}
+        self.status_signature = None
+        self.status_refresh_id = None
         self.scan_params = None    # parámetros del último escaneo correcto
         self.task = None
 
         self.frame = tk.Frame(notebook)
         notebook.add(self.frame, text="Últimas versiones")
-        paned = ttk.PanedWindow(self.frame, orient=tk.VERTICAL)
-        paned.pack(fill="both", expand=True, padx=5, pady=5)
-        top = tk.Frame(paned)
-        self.saved_panel = SavedSearchesPanel(paned, app, saved_store, on_load=self.load_saved)
-        paned.add(top, weight=3)
-        paned.add(self.saved_panel.frame, weight=1)
+        self.workflow_tabs = ttk.Notebook(self.frame)
+        self.workflow_tabs.pack(fill="both", expand=True, padx=5, pady=5)
+        top = tk.Frame(self.workflow_tabs)
+        self.workflow_tabs.add(top, text="Explorar y descargar")
+        self.saved_panel = SavedSearchesPanel(
+            self.workflow_tabs, app, saved_store, on_load=self.load_saved)
+        self.workflow_tabs.add(self.saved_panel.frame, text="Búsquedas guardadas")
+        ToolTip(self.workflow_tabs, "Explora ficheros en la primera pestaña y administra las sincronizaciones guardadas en la segunda.")
 
         self._build_filters(top)
         self._build_results(top)
@@ -79,15 +84,18 @@ class LatestFilesTab:
 
         tk.Label(box, text="Ramas:").grid(row=0, column=0, sticky="w")
         self.scope_var = tk.StringVar(value="Remotas")
-        ttk.Combobox(box, textvariable=self.scope_var, values=list(SCOPE_LABELS), state="readonly",
-                     width=10).grid(row=0, column=1, sticky="w", padx=5)
+        self.scope_combo = ttk.Combobox(box, textvariable=self.scope_var, values=list(SCOPE_LABELS),
+                                        state="readonly", width=10)
+        self.scope_combo.grid(row=0, column=1, sticky="w", padx=5)
         tk.Label(box, text="Regex ramas:").grid(row=0, column=2, sticky="e")
         self.entry_branch_regex = tk.Entry(box)
         self.entry_branch_regex.grid(row=0, column=3, sticky="ew", padx=5)
         self.fetch_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(box, text="Hacer fetch antes", variable=self.fetch_var).grid(row=0, column=4, sticky="w")
+        self.fetch_check = tk.Checkbutton(box, text="Hacer fetch antes", variable=self.fetch_var)
+        self.fetch_check.grid(row=0, column=4, sticky="w")
         self.icase_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(box, text="Ignorar mayúsculas", variable=self.icase_var).grid(row=0, column=5, sticky="w")
+        self.icase_check = tk.Checkbutton(box, text="Ignorar mayúsculas", variable=self.icase_var)
+        self.icase_check.grid(row=0, column=5, sticky="w")
 
         tk.Label(box, text="Regex ficheros:").grid(row=1, column=0, sticky="w", pady=(5, 0))
         self.entry_path_regex = tk.Entry(box)
@@ -98,22 +106,45 @@ class LatestFilesTab:
         self.button_cancel = tk.Button(box, text="Cancelar", width=10, command=self.cancel, state="disabled")
         self.button_cancel.grid(row=1, column=5, pady=(5, 0))
 
-        tk.Label(box, fg="#555555",
-                 text=r"Ejemplos: \.py$   ^src/.*\.(cs|xml)$   config   (vacío = todos los ficheros). "
-                      "Clic en ☐ o Espacio para marcar.").grid(row=2, column=0, columnspan=6, sticky="w")
+        self.filter_help = tk.Label(
+            box, fg="#555555",
+            text="1. Filtra y escanea   2. Marca los ficheros   3. Elige destino y descarga")
+        self.filter_help.grid(row=2, column=0, columnspan=6, sticky="w")
+        ToolTip(self.scope_combo, "Elige si buscar en ramas remotas, locales o en ambas.")
+        ToolTip(self.entry_branch_regex, "Limita las ramas por expresión regular. Vacío significa todas las ramas del ámbito elegido.")
+        ToolTip(self.fetch_check, "Actualiza las referencias remotas antes de escanear. Requiere conexión al servidor Git.")
+        ToolTip(self.icase_check, "Aplica la búsqueda de expresiones regulares sin distinguir mayúsculas y minúsculas.")
+        ToolTip(self.entry_path_regex, r"Filtra rutas con una expresión regular; por ejemplo, \.py$ o ^src/.*\.xml$. Vacío incluye todos los ficheros.")
+        ToolTip(self.button_scan, "Busca en las puntas de las ramas dónde está la versión más reciente de cada fichero.")
+        ToolTip(self.button_cancel, "Solicita cancelar el escaneo, la comprobación o la descarga en curso.")
+        ToolTip(self.filter_help, "Flujo recomendado: escanea, revisa/selecciona los resultados y descárgalos en la carpeta indicada.")
 
     def _build_results(self, parent):
-        self.table = ScrolledTree(parent, COLUMNS, sortable=True)
+        self.table = ScrolledTree(parent, COLUMNS)
         self.table.pack(fill="both", expand=True)
         self.tree = self.table.tree
         self.tree.heading("sel", text=CHECKED, command=self.toggle_all)
         self.tree.bind("<Button-1>", self._on_click, add="+")
         self.tree.bind("<space>", lambda e: self.toggle_rows(self.tree.selection()))
+        self.tree.bind("<Double-1>", self.show_selected_details)
+        for tag, color in (("status_up_to_date", "#e6f4ea"),
+                           ("status_update", "#fff4ce"),
+                           ("status_local", "#fde7e9"),
+                           ("status_missing", "#eeeeee"),
+                           ("status_untracked", "#f0e8ff"),
+                           ("status_error", "#ffd9d9")):
+            self.tree.tag_configure(tag, background=color)
         attach_context_menu(self.tree, [
+            ("Ver detalles del fichero", self.show_selected_details),
             ("Marcar/desmarcar filas seleccionadas", lambda: self.toggle_rows(self.tree.selection())),
             ("Copiar filas seleccionadas", self.copy_selection),
             ("Copiar todo el listado", self.copy_all),
         ])
+        ToolTip(
+            self.tree,
+            "☐/☑ marca ficheros para descargar. Doble clic o clic derecho permite consultar todos sus detalles.\n"
+            "Estados: Al día = mismo contenido; Actualización disponible = descarga antigua intacta;\n"
+            "Modificado localmente = hay ediciones locales; Sin seguimiento = no figura en el manifiesto.")
 
     def _build_marking(self, parent):
         bar = tk.Frame(parent)
@@ -121,13 +152,22 @@ class LatestFilesTab:
         tk.Label(bar, text="Marcar por regex:").pack(side=tk.LEFT)
         self.entry_mark_regex = tk.Entry(bar, width=30)
         self.entry_mark_regex.pack(side=tk.LEFT, padx=5)
-        for text, command in (("Marcar coincidentes", lambda: self.mark_regex(True)),
-                              ("Desmarcar coincidentes", lambda: self.mark_regex(False)),
-                              ("Marcar todo", lambda: self.set_all(True)),
-                              ("Desmarcar todo", lambda: self.set_all(False))):
-            tk.Button(bar, text=text, command=command).pack(side=tk.LEFT, padx=2)
+        self.mark_buttons = []
+        for text, command, tooltip in (
+                ("Marcar coincidentes", lambda: self.mark_regex(True),
+                 "Marca las rutas que coinciden con la expresión regular escrita."),
+                ("Desmarcar coincidentes", lambda: self.mark_regex(False),
+                 "Desmarca las rutas que coinciden con la expresión regular escrita."),
+                ("Marcar todo", lambda: self.set_all(True), "Marca todos los ficheros del resultado actual."),
+                ("Desmarcar todo", lambda: self.set_all(False), "Quita la marca de todos los ficheros.")):
+            button = tk.Button(bar, text=text, command=command)
+            button.pack(side=tk.LEFT, padx=2)
+            self.mark_buttons.append(button)
+            ToolTip(button, tooltip)
         self.label_count = tk.Label(bar, text="0 ficheros, 0 marcados")
         self.label_count.pack(side=tk.RIGHT)
+        ToolTip(self.entry_mark_regex, "Expresión regular aplicada a la ruta del fichero para marcar o desmarcar resultados.")
+        ToolTip(self.label_count, "Número de resultados encontrados y cuántos están marcados para descarga.")
 
     def _build_destination(self, parent):
         box = tk.LabelFrame(parent, text="Descarga a carpeta local", padx=8, pady=6)
@@ -135,28 +175,60 @@ class LatestFilesTab:
         box.grid_columnconfigure(1, weight=1)
 
         tk.Label(box, text="Carpeta destino:").grid(row=0, column=0, sticky="w")
-        self.entry_dest = tk.Entry(box)
+        self.dest_var = tk.StringVar()
+        self.entry_dest = tk.Entry(box, textvariable=self.dest_var)
         self.entry_dest.grid(row=0, column=1, sticky="ew", padx=5)
-        tk.Button(box, text="Examinar", command=lambda: browse_into(self.entry_dest)).grid(row=0, column=2)
+        self.dest_var.trace_add("write", lambda *_: self._schedule_status_refresh())
+        self.button_browse = tk.Button(box, text="Examinar", command=lambda: browse_into(self.entry_dest))
+        self.button_browse.grid(row=0, column=2)
 
         options = tk.Frame(box)
         options.grid(row=1, column=0, columnspan=3, sticky="w", pady=(5, 0))
         self.layout_var = tk.StringVar(value=exporter.LAYOUT_REPO)
-        tk.Radiobutton(options, text="Misma estructura que el repositorio", variable=self.layout_var,
-                       value=exporter.LAYOUT_REPO).pack(side=tk.LEFT)
-        tk.Radiobutton(options, text="Una subcarpeta por rama", variable=self.layout_var,
-                       value=exporter.LAYOUT_BRANCH).pack(side=tk.LEFT, padx=10)
+        self.layout_var.trace_add("write", lambda *_: self._schedule_status_refresh())
+        self.layout_repo = tk.Radiobutton(
+            options, text="Misma estructura que el repositorio", variable=self.layout_var,
+            value=exporter.LAYOUT_REPO)
+        self.layout_repo.pack(side=tk.LEFT)
+        self.layout_branch = tk.Radiobutton(
+            options, text="Una subcarpeta por rama", variable=self.layout_var,
+            value=exporter.LAYOUT_BRANCH)
+        self.layout_branch.pack(side=tk.LEFT, padx=10)
         self.overwrite_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(options, text="Sobrescribir ficheros modificados localmente",
-                       variable=self.overwrite_var).pack(side=tk.LEFT, padx=10)
+        self.overwrite_check = tk.Checkbutton(
+            options, text="Sobrescribir ficheros modificados localmente",
+            variable=self.overwrite_var)
+        self.overwrite_check.pack(side=tk.LEFT, padx=10)
 
         actions = tk.Frame(box)
         actions.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        for text, command in (("Descargar marcados", lambda: self.download(checked_only=True)),
-                              ("Descargar todos", lambda: self.download(checked_only=False)),
-                              ("Exportar listado Excel", self.export_excel),
-                              ("Guardar búsqueda...", self.save_search)):
-            tk.Button(actions, text=text, width=20, command=command).pack(side=tk.LEFT, padx=3)
+        self.button_check = tk.Button(actions, text="Comprobar estado local", width=22,
+                                      command=self.check_destination, state="disabled")
+        self.button_check.pack(side=tk.LEFT, padx=3)
+        self.button_details = tk.Button(actions, text="Ver detalles", width=14,
+                                        command=self.show_selected_details)
+        self.button_details.pack(side=tk.LEFT, padx=3)
+        self.action_buttons = []
+        for text, command, tooltip in (
+                ("Descargar marcados", lambda: self.download(checked_only=True),
+                 "Descarga únicamente los ficheros marcados. Los cambios locales se protegen según la opción elegida."),
+                ("Descargar todos", lambda: self.download(checked_only=False),
+                 "Descarga todos los ficheros del resultado actual."),
+                ("Exportar listado Excel", self.export_excel,
+                 "Exporta el listado completo, incluidos autor, commit, fecha, mensaje y ramas con contenido idéntico."),
+                ("Guardar búsqueda...", self.save_search,
+                 "Guarda los filtros y el destino para repetir la búsqueda o sincronizarla automáticamente.")):
+            button = tk.Button(actions, text=text, width=20, command=command)
+            button.pack(side=tk.LEFT, padx=3)
+            self.action_buttons.append(button)
+            ToolTip(button, tooltip)
+        ToolTip(self.entry_dest, "Carpeta donde se guardarán los ficheros, respetando la estructura seleccionada.")
+        ToolTip(self.button_browse, "Selecciona la carpeta destino mediante el explorador.")
+        ToolTip(self.layout_repo, "Guarda cada fichero usando la ruta relativa original del repositorio.")
+        ToolTip(self.layout_branch, "Crea una subcarpeta por rama para separar ficheros con el mismo nombre.")
+        ToolTip(self.overwrite_check, "Si está desmarcado, los ficheros editados localmente no se sobrescriben.")
+        ToolTip(self.button_check, "Compara cada fichero del destino con la versión actual y el manifiesto de descargas.")
+        ToolTip(self.button_details, "Muestra fecha, commit, autor, mensaje y ramas donde existe el mismo contenido.")
 
     def _build_status(self, parent):
         bar = tk.Frame(parent)
@@ -165,6 +237,8 @@ class LatestFilesTab:
         self.progress.pack(side=tk.RIGHT)
         self.label_status = tk.Label(bar, text="Listo.", anchor="w")
         self.label_status.pack(side=tk.LEFT, fill="x", expand=True)
+        ToolTip(self.progress, "Indicador de que hay una operación ejecutándose en segundo plano.")
+        ToolTip(self.label_status, "Progreso, resultado o aviso de la última operación.")
 
     # ------------------------------------------------------- tareas en fondo
     def _set_status(self, text):
@@ -177,6 +251,7 @@ class LatestFilesTab:
         self._set_status(status)
         self.button_scan.config(state="disabled")
         self.button_cancel.config(state="normal")
+        self.button_check.config(state="disabled")
         self.progress.start(12)
         self.task = self.app.runner.submit(fn, on_success=on_success, on_error=self._on_error,
                                            on_progress=self._set_status, on_finally=self._on_finished)
@@ -195,6 +270,7 @@ class LatestFilesTab:
         self.progress.stop()
         self.button_scan.config(state="normal")
         self.button_cancel.config(state="disabled")
+        self.button_check.config(state="normal" if self.scan_params and self.results else "disabled")
 
     def cancel(self):
         if self.task:
@@ -240,6 +316,8 @@ class LatestFilesTab:
         results, branches, warning = result
         self.scan_params = params
         self.results = results
+        self.local_statuses = {}
+        self.status_signature = None
         paths = {r["path"] for r in results}
         if mark is MARK_ALL:
             self.checked = paths
@@ -260,14 +338,114 @@ class LatestFilesTab:
         for i, entry in enumerate(self.results):
             iid = str(i)
             self.entries[iid] = entry
-            self.table.insert((CHECKED if entry["path"] in self.checked else UNCHECKED, entry["path"],
-                               entry["branch"], entry["date"], entry["commit"][:8], entry["author"],
-                               entry["message"], ", ".join(entry["same_in"]), entry["branch_count"]), iid=iid)
+            status = self._status_for(entry["path"])
+            status_tag = self._status_tag(status)
+            self.table.insert(
+                (CHECKED if entry["path"] in self.checked else UNCHECKED, entry["path"],
+                 entry["branch"], status), iid=iid,
+                tags=(status_tag,) if status_tag else ())
         self._update_count()
+
+    @staticmethod
+    def _status_tag(status):
+        return {
+            exporter.STATUS_UP_TO_DATE: "status_up_to_date",
+            exporter.STATUS_UPDATE_AVAILABLE: "status_update",
+            exporter.STATUS_LOCAL_MODIFIED: "status_local",
+            exporter.STATUS_MISSING: "status_missing",
+            exporter.STATUS_UNTRACKED: "status_untracked",
+            exporter.STATUS_ERROR: "status_error",
+        }.get(status, "")
+
+    def _current_status_signature(self, dest=None, layout=None):
+        dest = self.entry_dest.get().strip() if dest is None else dest
+        layout = self.layout_var.get() if layout is None else layout
+        normalized = os.path.normcase(os.path.abspath(dest)) if dest else ""
+        return normalized, layout
+
+    def _status_for(self, path):
+        if self.status_signature != self._current_status_signature():
+            return exporter.STATUS_UNCHECKED
+        return self.local_statuses.get(path, exporter.STATUS_UNCHECKED)
+
+    def _refresh_status_column(self):
+        for iid, entry in self.entries.items():
+            status = self._status_for(entry["path"])
+            self.tree.set(iid, "status", status)
+            status_tag = self._status_tag(status)
+            self.tree.item(iid, tags=(status_tag,) if status_tag else ())
+        if self.status_signature is not None and self.status_signature != self._current_status_signature():
+            self._set_status("Estado local pendiente de comprobar para este destino y estructura.")
+
+    def _schedule_status_refresh(self):
+        if self.status_refresh_id:
+            self.app.root.after_cancel(self.status_refresh_id)
+        self.status_refresh_id = self.app.root.after(200, self._run_status_refresh)
+
+    def _run_status_refresh(self):
+        self.status_refresh_id = None
+        self._refresh_status_column()
+
+    def check_destination(self):
+        if not self.scan_params or not self.results:
+            messagebox.showwarning("Advertencia", "Primero escanea las ramas.")
+            return
+        dest = self.entry_dest.get().strip()
+        if not dest:
+            messagebox.showwarning("Advertencia", "Selecciona la carpeta destino.")
+            return
+        layout = self.layout_var.get()
+        signature = self._current_status_signature(dest, layout)
+        self._start(
+            lambda progress, cancel: exporter.inspect_entries(
+                dest, self.results, layout, progress=progress, cancel=cancel),
+            lambda result: self._on_status_checked(signature, result),
+            "Comprobando versiones en la carpeta destino...")
+
+    def _on_status_checked(self, signature, result):
+        if signature != self._current_status_signature():
+            self._set_status("La carpeta o estructura cambió durante la comprobación; vuelve a comprobar.")
+            return
+        self.local_statuses = result["statuses"]
+        self.status_signature = signature
+        self._refresh_status_column()
+        counts = {}
+        for status in self.local_statuses.values():
+            counts[status] = counts.get(status, 0) + 1
+        summary = ", ".join(f"{count} {status.lower()}" for status, count in counts.items())
+        self._set_status(summary or "No hay ficheros para comprobar.")
+        for error in result["errors"]:
+            self.app.log(f"Error al comprobar fichero: {error}")
 
     # ------------------------------------------------------------- marcado
     def _update_count(self):
         self.label_count.config(text=f"{len(self.results)} ficheros, {len(self.checked)} marcados")
+
+    def show_selected_details(self, event=None):
+        selection = self.tree.selection()
+        if not selection and event is not None:
+            iid = self.tree.identify_row(event.y)
+            if iid:
+                self.tree.selection_set(iid)
+                selection = (iid,)
+        if not selection:
+            messagebox.showwarning("Detalles", "Selecciona un fichero para ver sus detalles.")
+            return
+
+        entry = self.entries[selection[0]]
+        same_in = ", ".join(entry["same_in"]) or "Ninguna otra rama"
+        details = (
+            f"Fichero: {entry['path']}\n"
+            f"Rama con la versión más reciente: {entry['branch']}\n"
+            f"Estado local: {self._status_for(entry['path'])}\n"
+            f"Fecha del último cambio: {entry['date']}\n"
+            f"Commit: {entry['commit']}\n"
+            f"Autor: {entry['author']}\n"
+            f"Mensaje: {entry['message']}\n"
+            f"Contenido idéntico en: {same_in}\n"
+            f"Ramas donde existe: {entry['branch_count']}")
+        show_text_window(self.app.root, f"Detalles del fichero: {entry['path']}", details,
+                         geometry="900x420")
 
     def _refresh_marks(self, iids=None):
         for iid in (self.entries if iids is None else iids):
@@ -316,7 +494,8 @@ class LatestFilesTab:
     # ------------------------------------------------------------ acciones
     def _row(self, iid):
         e = self.entries[iid]
-        return (e["path"], e["branch"], e["date"], e["commit"], e["author"], e["message"],
+        return (e["path"], e["branch"], self._status_for(e["path"]), e["date"], e["commit"],
+                e["author"], e["message"],
                 ", ".join(e["same_in"]), e["branch_count"], "Sí" if e["path"] in self.checked else "No")
 
     def copy_selection(self):
@@ -359,9 +538,10 @@ class LatestFilesTab:
         self.app.log(f"Descargando {len(entries)} ficheros a '{dest}'...")
         self._start(lambda progress, cancel: exporter.export_entries(repo, entries, dest, layout, overwrite,
                                                                      progress, cancel),
-                    lambda summary: self._on_download_done(dest, summary), "Descargando ficheros...")
+                    lambda summary: self._on_download_done(dest, layout, summary),
+                    "Descargando ficheros...")
 
-    def _on_download_done(self, dest, summary):
+    def _on_download_done(self, dest, layout, summary):
         text = exporter.summary_text(summary)
         self._set_status(text)
         self.app.log(f"Descarga en '{dest}': {text}")
@@ -374,6 +554,10 @@ class LatestFilesTab:
                 details.append(f"\n{label}:\n  " + "\n  ".join(items[:10]) +
                                (f"\n  ... (+{len(items) - 10} más, ver Consola)" if len(items) > 10 else ""))
         messagebox.showinfo("Descarga completada", f"{text}\n\nDestino: {dest}" + "".join(details))
+        signature = self._current_status_signature(dest, layout)
+        self.app.root.after_idle(
+            lambda: self.check_destination()
+            if signature == self._current_status_signature() else None)
 
     # ---------------------------------------------------- búsquedas guardadas
     def save_search(self):
@@ -414,4 +598,5 @@ class LatestFilesTab:
         self.layout_var.set(search["layout"])
         self.overwrite_var.set(search["overwrite_local"])
         paths = search["selected_paths"]
+        self.workflow_tabs.select(0)
         self.scan(mark=MARK_ALL if paths is None else paths)

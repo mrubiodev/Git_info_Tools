@@ -5,7 +5,7 @@ from tkinter import messagebox, simpledialog
 from ..core.formatting import repo_short_name
 from ..core.saved_searches import describe_filter, describe_selection
 from ..core.sync import due_searches, run_saved_search
-from .widgets import ScrolledTree
+from .widgets import ScrolledTree, ToolTip
 
 COLUMNS = [("name", "Nombre", 150), ("repo", "Repositorio", 130), ("filter", "Filtro", 220),
            ("selection", "Selección", 90), ("dest", "Destino", 220), ("auto", "Auto", 50, "center"),
@@ -28,18 +28,31 @@ class SavedSearchesPanel:
         self.table = ScrolledTree(self.frame, COLUMNS, selectmode="browse", height=5)
         self.table.pack(fill="both", expand=True)
         self.table.tree.bind("<Double-1>", lambda e: self.load_selected())
+        ToolTip(self.table.tree, "Selecciona una búsqueda para ejecutar, editar sus opciones, cargar sus filtros o eliminarla.")
 
         buttons = tk.Frame(self.frame)
         buttons.pack(fill="x", pady=(5, 0))
-        for text, command in (("Ejecutar ahora", self.run_selected),
-                              ("Activar/Desactivar auto", self.toggle_auto),
-                              ("Cambiar intervalo", self.change_interval),
-                              ("Cargar en pantalla", self.load_selected),
-                              ("Eliminar", self.delete_selected),
-                              ("Refrescar", self.refresh)):
-            tk.Button(buttons, text=text, command=command).pack(side=tk.LEFT, padx=3)
-        tk.Label(buttons, fg="#555555", text="Auto funciona con la app abierta; sin abrirla: "
-                                            "main.py --sync-all (Programador de tareas)").pack(side=tk.RIGHT)
+        for text, command, tooltip in (
+                ("Ejecutar ahora", self.run_selected,
+                 "Ejecuta ahora la búsqueda seleccionada y actualiza sus ficheros en destino."),
+                ("Activar/Desactivar auto", self.toggle_auto,
+                 "Activa o pausa la sincronización periódica de la búsqueda seleccionada."),
+                ("Cambiar intervalo", self.change_interval,
+                 "Cambia cuántos minutos espera la aplicación entre sincronizaciones automáticas."),
+                ("Cargar en pantalla", self.load_selected,
+                 "Copia sus filtros y destino a «Explorar y descargar» para revisarlos."),
+                ("Eliminar", self.delete_selected,
+                 "Elimina la búsqueda guardada; no elimina los ficheros ya descargados."),
+                ("Refrescar", self.refresh,
+                 "Vuelve a leer de la base de datos las búsquedas y sus últimos resultados.")):
+            button = tk.Button(buttons, text=text, command=command)
+            button.pack(side=tk.LEFT, padx=3)
+            ToolTip(button, tooltip)
+        self.auto_help = tk.Label(
+            buttons, fg="#555555",
+            text="Auto funciona con la app abierta; sin abrirla: main.py --sync-all")
+        self.auto_help.pack(side=tk.RIGHT)
+        ToolTip(self.auto_help, "Para sincronizar sin la interfaz, programa «python main.py --sync-all» en el Programador de tareas de Windows.")
 
         self.refresh()
         self.app.root.after(self.FIRST_TICK_MS, self._tick)

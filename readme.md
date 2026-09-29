@@ -22,13 +22,17 @@ Aplicación de escritorio para consultar referencias de ramas remotas de un repo
 
 ## Últimas versiones de ficheros entre ramas
 
-En la pestaña **Últimas versiones**:
+En la pestaña **Últimas versiones**, el flujo principal se organiza en **Explorar y descargar**; las búsquedas y sincronizaciones guardadas están separadas en su propia pestaña:
 
 1. Elige el ámbito (ramas remotas, locales o todas) y, opcionalmente, una expresión regular para las rutas de fichero (por ejemplo, `\.py$` o `^src/.*\.(cs|xml)$`) y otra para los nombres de rama.
 2. **Escanear ramas** muestra cada fichero con la rama en la que se modificó más recientemente (según la fecha del último commit que lo tocó), el commit, el autor, las ramas donde el contenido es idéntico y en cuántas ramas existe.
 3. Marca ficheros haciendo clic en `☐`, con la tecla Espacio, con **Marcar por regex** o con **Marcar todo**.
 4. **Descargar marcados** o **Descargar todos** copia esa versión a la carpeta destino, con la misma estructura que el repositorio o con una subcarpeta por rama. El listado también se puede exportar a Excel.
 5. **Guardar búsqueda...** almacena el filtro completo (incluye ficheros que aparezcan después) o solo los ficheros marcados, y opcionalmente activa la descarga automática cada N minutos.
+
+Para revisar los ficheros que ya hay en una carpeta, indica el destino y pulsa **Comprobar estado local**. La columna **Estado local** muestra si están al día, si hay una actualización disponible, si se modificaron localmente, si no están descargados o si no tienen registro en el manifiesto. Si están al día, guarda la búsqueda para actualizarlos automáticamente; también puedes usar **Ejecutar ahora** en búsquedas guardadas o descargar de nuevo los ficheros seleccionados. Los cambios locales no se sobrescriben salvo que se active esa opción.
+
+La tabla principal muestra solo selección, fichero, rama más reciente y estado local para facilitar la lectura. **Ver detalles**, el doble clic o el menú contextual muestran fecha, commit, autor, mensaje y ramas con contenido idéntico; copiar o exportar mantiene todos esos datos. Pasa el cursor por controles y tabla para consultar la ayuda de cada opción.
 
 La sincronización ejecuta `git fetch --all --prune`, compara las puntas de las ramas con la ejecución anterior y solo escanea y descarga si algo cambió. En la carpeta destino se guarda `.git_latest_manifest.json` para descargar únicamente los ficheros que cambian. Los ficheros modificados localmente no se sobrescriben salvo que se active esa opción. Se copia el contenido tal cual está en Git, sin filtros de fin de línea ni LFS.
 

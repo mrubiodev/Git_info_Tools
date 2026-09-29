@@ -19,6 +19,14 @@ MANIFEST_NAME = ".git_latest_manifest.json"
 LAYOUT_REPO = "repo"      # destino/<ruta en el repo>
 LAYOUT_BRANCH = "branch"  # destino/<rama>/<ruta en el repo>
 
+STATUS_UNCHECKED = "Sin comprobar"
+STATUS_MISSING = "No descargado"
+STATUS_UP_TO_DATE = "Al día"
+STATUS_UPDATE_AVAILABLE = "Actualización disponible"
+STATUS_LOCAL_MODIFIED = "Modificado localmente"
+STATUS_UNTRACKED = "Sin seguimiento"
+STATUS_ERROR = "Error"
+
 _WINDOWS_INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 
@@ -188,6 +196,44 @@ def export_entries(repo_path, entries, dest_dir, layout=LAYOUT_REPO, overwrite_l
         manifest["updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         save_manifest(dest_dir, manifest)
     return summary
+
+
+def inspect_entries(dest_dir, entries, layout=LAYOUT_REPO, progress=None, cancel=None):
+    """Compara los ficheros del destino con las versiones actuales y el manifiesto."""
+    manifest = load_manifest(dest_dir)
+    files = manifest["files"]
+    statuses = {}
+    errors = []
+    for i, entry in enumerate(entries, 1):
+        check_cancel(cancel)
+        if progress and (i == 1 or i % 25 == 0 or i == len(entries)):
+            progress(f"Comprobando {i}/{len(entries)}: {entry['path']}")
+        try:
+            rel = target_relpath(entry, layout)
+            target = resolve_target(dest_dir, rel)
+            if not os.path.isfile(target):
+                statuses[entry["path"]] = STATUS_MISSING
+                continue
+
+            local_blob = file_blob_id(target, len(entry["blob"]))
+            if local_blob == entry["blob"]:
+                statuses[entry["path"]] = STATUS_UP_TO_DATE
+                continue
+
+            previous = files.get(rel)
+            previous_blob = previous.get("blob") if isinstance(previous, dict) else None
+            if previous_blob and local_blob == previous_blob:
+                statuses[entry["path"]] = STATUS_UPDATE_AVAILABLE
+            elif previous_blob:
+                statuses[entry["path"]] = STATUS_LOCAL_MODIFIED
+            else:
+                statuses[entry["path"]] = STATUS_UNTRACKED
+        except Cancelled:
+            raise
+        except Exception as e:
+            statuses[entry["path"]] = STATUS_ERROR
+            errors.append(f"{entry.get('path')}: {e}")
+    return {"statuses": statuses, "errors": errors}
 
 
 def summary_text(summary):
