@@ -1,5 +1,9 @@
 # Git Branch Info & Recovery
 
+<p align="center">
+  <img src="res/Git_info_Tools_cover.svg" alt="Git_info Tools — Git Branch Info & Recovery" width="100%">
+</p>
+
 > Aplicación de escritorio para consultar ramas remotas de Git y sugerir la recuperación manual de referencias perdidas.
 
 ![Estado](https://img.shields.io/badge/estado-En%20desarrollo-yellow)
