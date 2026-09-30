@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="864" viewBox="0 0 1536 864">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#081126"/><stop offset="1" stop-color="#142f62"/></linearGradient>
+  <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#63a7ff"/><stop offset="1" stop-color="#315fe5"/></linearGradient>
+  <linearGradient id="git" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff6240"/><stop offset="1" stop-color="#f04424"/></linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="1536" height="864" fill="url(#bg)"/>
+<g transform="translate(90 220)"><rect width="230" height="230" rx="34" transform="rotate(45 115 115)" fill="url(#git)"/>
+<circle cx="115" cy="72" r="14" fill="#071126"/><circle cx="72" cy="150" r="14" fill="#071126"/><circle cx="158" cy="150" r="14" fill="#071126"/>
+<path d="M115 72v78M72 150h86" stroke="#071126" stroke-width="12" fill="none"/></g>
+<line x1="390" y1="205" x2="390" y2="490" stroke="#4778e8" stroke-width="4"/>
+<text x="440" y="315" font-family="Segoe UI,Arial,sans-serif" font-size="94" font-weight="700" fill="#fff">Git_info</text>
+<text x="440" y="405" font-family="Segoe UI,Arial,sans-serif" font-size="94" font-weight="700" fill="#72a1ff">Tools</text>
+<g fill="none" stroke-linecap="round" filter="url(#glow)">
+<path d="M1000 160 C1040 210 1030 250 990 300 C950 350 1000 390 1060 430" stroke="#2ed6ad" stroke-width="8"/>
+<path d="M1130 125 C1100 205 1110 250 1170 300 C1230 350 1190 405 1120 455" stroke="#b36cf2" stroke-width="8"/>
+<path d="M1260 210 C1210 260 1220 310 1300 350" stroke="#ffc62e" stroke-width="8"/>
+</g>
+<g fill="#fff"><circle cx="990" cy="300" r="10"/><circle cx="1060" cy="430" r="10"/><circle cx="1170" cy="300" r="10"/><circle cx="1120" cy="455" r="10"/><circle cx="1300" cy="350" r="10"/></g>
+<g transform="translate(850 210)"><rect width="570" height="385" rx="28" fill="#0a1730" stroke="#3565a8" stroke-width="8"/>
+<rect width="570" height="62" rx="28" fill="#173563"/><circle cx="34" cy="31" r="10" fill="#ff4964"/><circle cx="68" cy="31" r="10" fill="#ffc62e"/><circle cx="102" cy="31" r="10" fill="#2ed6ad"/>
+<text x="42" y="105" font-family="Consolas,monospace" font-size="21" fill="#2ed6ad">$ git log --oneline --graph</text>
+<text x="42" y="143" font-family="Consolas,monospace" font-size="18" fill="#63a7ff">│ a1b2c3d  feat: nueva funcionalidad</text>
+<text x="42" y="177" font-family="Consolas,monospace" font-size="18" fill="#8ef0c9">├ 9f8e7d6  fix: corrección de bug</text>
+<text x="42" y="211" font-family="Consolas,monospace" font-size="18" fill="#ffd24a">├ 5e4d3c2  docs: actualización README</text>
+<text x="42" y="245" font-family="Consolas,monospace" font-size="18" fill="#d38cff">└ 1a2b3c4  chore: ajustes</text>
+<text x="42" y="292" font-family="Consolas,monospace" font-size="21" fill="#2ed6ad">$ git reflog</text>
+<text x="42" y="326" font-family="Consolas,monospace" font-size="18" fill="#fff">HEAD@{0}  checkout: moving to main</text>
+<text x="42" y="355" font-family="Consolas,monospace" font-size="18" fill="#fff">HEAD@{1}  commit: nueva funcionalidad</text></g>
+<g font-family="Segoe UI,Arial,sans-serif" text-anchor="middle">
+<g transform="translate(135 590)"><circle cx="0" cy="0" r="34" fill="none" stroke="#4e9cff" stroke-width="8"/><circle cx="-18" cy="18" r="7" fill="#4e9cff"/><circle cx="18" cy="-18" r="7" fill="#4e9cff"/><path d="M-13 13L13 -13" stroke="#4e9cff" stroke-width="7"/><text y="82" fill="#fff" font-size="25" font-weight="700">Ramas</text><text y="111" fill="#8aa8dc" font-size="19">y commits</text></g>
+<g transform="translate(375 590)"><circle cx="0" cy="0" r="34" fill="none" stroke="#2ed6ad" stroke-width="8"/><path d="M0-21v21l15 10" fill="none" stroke="#2ed6ad" stroke-width="8" stroke-linecap="round"/><text y="82" fill="#fff" font-size="25" font-weight="700">Reflog</text><text y="111" fill="#8aa8dc" font-size="19">historial completo</text></g>
+<g transform="translate(615 590)"><circle cx="0" cy="0" r="34" fill="none" stroke="#b36cf2" stroke-width="8"/><path d="M22 2A25 25 0 1 1 -2 -24" fill="none" stroke="#b36cf2" stroke-width="8"/><text y="82" fill="#fff" font-size="25" font-weight="700">Recupera</text><text y="111" fill="#8aa8dc" font-size="19">ramas perdidas</text></g>
+<g transform="translate(850 590)"><rect x="-27" y="-31" width="46" height="55" rx="6" fill="none" stroke="#ffc62e" stroke-width="7"/><circle cx="24" cy="18" r="14" fill="none" stroke="#ffc62e" stroke-width="7"/><path d="M35 29l14 14" stroke="#ffc62e" stroke-width="7"/><path d="M-15-13h20M-15 2h20M-15 17h12" stroke="#ffc62e" stroke-width="6"/><text y="82" fill="#fff" font-size="25" font-weight="700">Información</text><text y="111" fill="#8aa8dc" font-size="19">útil y rápida</text></g></g>
+<path d="M0 760 C250 690 430 810 690 750 C930 695 1160 800 1536 710 L1536 864 L0 864Z" fill="#10275a" opacity=".85"/>
+<text x="75" y="825" font-family="Consolas,monospace" font-size="28" fill="#6d91d1">&gt;_ git · info · tools</text>
+</svg>
