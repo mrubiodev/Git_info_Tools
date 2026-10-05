@@ -5,12 +5,53 @@ from tkinter import messagebox, simpledialog
 from ..core.formatting import repo_short_name
 from ..core.saved_searches import describe_filter, describe_selection
 from ..core.sync import due_searches, run_saved_search
-from .widgets import ScrolledTree, ToolTip
+from .widgets import ScrolledTree, ToolTip, attach_context_menu, show_text_window
 
-COLUMNS = [("name", "Nombre", 150), ("repo", "Repositorio", 130), ("filter", "Filtro", 220),
-           ("selection", "Selección", 90), ("dest", "Destino", 220), ("auto", "Auto", 50, "center"),
-           ("interval", "Cada (min)", 75, "center"), ("last_run", "Última ejecución", 130),
-           ("last_result", "Resultado", 320)]
+COLUMNS = [("name", "Nombre", 220), ("repo", "Repositorio", 170),
+           ("auto", "Auto", 65, "center"), ("last_run", "Última ejecución", 150),
+           ("last_result", "Resultado", 350)]
+
+
+def format_search_details(search):
+    details = search["last_details"]
+    lines = [
+        f"Búsqueda: {search['name']}",
+        f"Repositorio: {search['repo_path']}",
+        f"Ámbito: {search['scope']}",
+        f"Filtro: {describe_filter(search)}",
+        f"Selección: {describe_selection(search)}",
+        f"Destino: {search['dest_dir']}",
+        f"Estructura: {search['layout']}",
+        f"Automática: {'Sí' if search['auto_sync'] else 'No'} (cada {search['interval_minutes']} min)",
+        f"Última ejecución: {search['last_run'] or 'Nunca'}",
+        f"Resultado: {search['last_result'] or 'Sin ejecutar'}",
+    ]
+    if details is None:
+        return "\n".join(lines + ["", "No hay detalles de ejecución registrados."])
+    if details.get("error"):
+        lines.extend(["", "Error de ejecución:", details["error"]])
+    if details.get("note"):
+        lines.extend(["", details["note"]])
+    groups = (
+        ("Ficheros descargados", "downloaded"),
+        ("Sin cambios", "unchanged"),
+        ("Conflictos locales (no sobrescritos)", "conflicts"),
+        ("Ficheros ya no presentes", "missing"),
+        ("Errores por fichero", "errors"),
+        ("Avisos", "warnings"),
+    )
+    for label, key in groups:
+        items = details.get(key, [])
+        if items:
+            lines.extend(["", f"{label} ({len(items)}):"])
+            for item in items:
+                if key == "downloaded":
+                    lines.append(
+                        f"  {item['target']}  ←  {item['path']} "
+                        f"[{item['branch']}, commit {item['commit']}]")
+                else:
+                    lines.append(f"  {item}")
+    return "\n".join(lines)
 
 
 class SavedSearchesPanel:
@@ -27,14 +68,22 @@ class SavedSearchesPanel:
         self.frame = tk.LabelFrame(parent, text="Búsquedas guardadas y sincronización automática", padx=5, pady=5)
         self.table = ScrolledTree(self.frame, COLUMNS, selectmode="browse", height=5)
         self.table.pack(fill="both", expand=True)
-        self.table.tree.bind("<Double-1>", lambda e: self.load_selected())
-        ToolTip(self.table.tree, "Selecciona una búsqueda para ejecutar, editar sus opciones, cargar sus filtros o eliminarla.")
+        self.table.tree.bind("<Double-1>", self.show_details)
+        self.context_menu = attach_context_menu(self.table.tree, [
+            ("Ver detalles y ficheros descargados", self.show_details),
+            ("Ejecutar ahora", self.run_selected),
+            ("Cargar en pantalla", self.load_selected),
+        ])
+        self.table.tree.bind("<Button-3>", self._show_context_menu)
+        ToolTip(self.table.tree, "Doble clic o clic derecho: resultado completo, origen de las descargas y errores.")
 
         buttons = tk.Frame(self.frame)
         buttons.pack(fill="x", pady=(5, 0))
         for text, command, tooltip in (
                 ("Ejecutar ahora", self.run_selected,
-                 "Ejecuta ahora la búsqueda seleccionada y actualiza sus ficheros en destino."),
+                 "Ejecuta la búsqueda seleccionada en cualquier momento, aunque las ramas no hayan cambiado."),
+                ("Ver detalles", self.show_details,
+                 "Muestra opciones, ficheros descargados y su origen, conflictos y errores de la última ejecución."),
                 ("Activar/Desactivar auto", self.toggle_auto,
                  "Activa o pausa la sincronización periódica de la búsqueda seleccionada."),
                 ("Cambiar intervalo", self.change_interval,
@@ -70,9 +119,8 @@ class SavedSearchesPanel:
             iid = str(search["id"])
             self.searches[iid] = search
             result = "(ejecutándose...)" if search["id"] in self.running else (search["last_result"] or "")
-            self.table.insert((search["name"], repo_short_name(search["repo_path"]), describe_filter(search),
-                               describe_selection(search), search["dest_dir"],
-                               "Sí" if search["auto_sync"] else "No", search["interval_minutes"],
+            self.table.insert((search["name"], repo_short_name(search["repo_path"]),
+                               "Sí" if search["auto_sync"] else "No",
                                search["last_run"] or "", result), iid=iid)
         if selected and str(selected["id"]) in self.searches:
             self.table.tree.selection_set(str(selected["id"]))
@@ -90,6 +138,26 @@ class SavedSearchesPanel:
         if search:
             self.run(search, force=True, manual=True)
 
+    def _show_context_menu(self, event):
+        iid = self.table.tree.identify_row(event.y)
+        if not iid:
+            return
+        self.table.tree.selection_set(iid)
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def show_details(self, event=None):
+        if event is not None:
+            iid = self.table.tree.identify_row(event.y)
+            if iid:
+                self.table.tree.selection_set(iid)
+        search = self._selected()
+        if search:
+            show_text_window(self.app.root, f"Búsqueda guardada: {search['name']}",
+                             format_search_details(search), geometry="950x600")
+
     def run(self, search, force=False, manual=False):
         if search["id"] in self.running:
             if manual:
@@ -103,22 +171,28 @@ class SavedSearchesPanel:
                 parallel=getattr(self.app, 'parallel_var', tk.BooleanVar(value=False)).get(),
                 max_workers=getattr(self.app, 'workers_var', tk.IntVar(value=4)).get()
             ),
-            on_success=lambda summary: self._report(name, summary, manual),
-            on_error=lambda e: self._failed(name, e, manual),
+            on_success=lambda summary: self._report(search, summary, manual),
+            on_error=lambda e: self._failed(search, e, manual),
             on_finally=lambda: self._finished(search["id"]),
         )
         self.refresh()
 
-    def _report(self, name, summary, manual):
+    def _report(self, search, summary, manual):
+        name = search["name"]
         self.app.log(f"[Sincronización '{name}'] {summary['text']}")
+        for item in summary.get("downloaded", []):
+            self.app.log(f"    Descargado: {item['target']} ← {item['branch']} ({item['commit']})")
         for label, key in (("Con cambios locales", "conflicts"), ("Ya no existen", "missing"),
                            ("Errores", "errors")):
             for item in summary.get(key, [])[:20]:
                 self.app.log(f"    {label}: {item}")
         if manual:
-            messagebox.showinfo("Sincronización", f"{name}:\n{summary['text']}")
+            self.refresh()
+            self.table.tree.selection_set(str(search["id"]))
+            self.show_details()
 
-    def _failed(self, name, error, manual):
+    def _failed(self, search, error, manual):
+        name = search["name"]
         self.app.log(f"[Sincronización '{name}'] Error: {error}")
         if manual:
             messagebox.showerror("Sincronización", f"{name}:\n{error}")

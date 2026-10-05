@@ -94,15 +94,6 @@ echo Empaquetando EXE como %PROJECT%.exe (version %VERSION%) usando entrada %ENT
 %VENV_PY% -m PyInstaller -n "%PROJECT%" -i "%SCRIPT_DIR%res\app_icon.ico" --collect-data TKinterModernThemes --hidden-import git --hidden-import openpyxl %CONSOLE_FLAG% --onefile "%SCRIPT_DIR%%ENTRYPOINT%"
 
 if exist "%SCRIPT_DIR%dist\" (
-    REM Actualizar el archivo de requisitos si la carpeta dist existe
-    echo Actualizando el archivo de requisitos...
-    %VENV_PIP% freeze > "%SCRIPT_DIR%requirements.txt"
-    echo Archivo de requisitos actualizado exitosamente.
-
-    echo Copiando el archivo de requisitos a la carpeta dist...
-    copy "%SCRIPT_DIR%requirements.txt" "%SCRIPT_DIR%dist\"
-    echo Archivo de requisitos copiado exitosamente.
-
     if exist "%SCRIPT_DIR%resources_release\" (
         echo Ambas carpetas existen. Copiando archivos...
         xcopy /E /I /Y  "%SCRIPT_DIR%resources_release\" "%SCRIPT_DIR%dist\"
@@ -113,6 +104,9 @@ if exist "%SCRIPT_DIR%dist\" (
 
     REM Create release directory and zip dist into release\<project>_<version>.zip
     if not exist "%SCRIPT_DIR%release" mkdir "%SCRIPT_DIR%release"
+    REM Do not package local databases, manifests, credentials or private keys.
+    powershell -NoProfile -Command "$bad = Get-ChildItem -LiteralPath '%SCRIPT_DIR%dist' -Recurse -File | Where-Object { $_.Name -match '(\.db(-.*)?|\.sqlite3?|\.pem|\.key|\.env(\..*)?|\.git_latest_manifest\.json)$' }; if ($bad) { Write-Error 'Datos privados detectados en dist. Se cancela el empaquetado.'; exit 1 }"
+    if errorlevel 1 exit /b 1
     echo Comprimiendo %SCRIPT_DIR%dist\ en %ZIP_PATH%
     if exist "%ZIP_PATH%" (
         del /Q "%ZIP_PATH%"

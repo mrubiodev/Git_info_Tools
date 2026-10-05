@@ -15,10 +15,24 @@ desktop.ini
 # Build and distribution folders
 build/
 dist/
+release/*.zip
+compver-knowledge-map/
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 
 # Database files
 *.db
+*.db-*
+*.sqlite
+*.sqlite3
+.git_latest_manifest.json
+
+# Local configuration and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key

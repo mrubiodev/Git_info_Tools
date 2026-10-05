@@ -163,7 +163,7 @@ def export_entries(repo_path, entries, dest_dir, layout=LAYOUT_REPO, overwrite_l
     manifest = load_manifest(dest_dir)
     manifest["repo"] = os.path.abspath(repo_path)
     files = manifest["files"]
-    summary = {"written": [], "unchanged": [], "conflicts": [], "errors": []}
+    summary = {"written": [], "written_details": [], "unchanged": [], "conflicts": [], "errors": []}
     total = len(entries)
     try:
         with BlobReader(repo_path) as reader:
@@ -187,6 +187,10 @@ def export_entries(repo_path, entries, dest_dir, layout=LAYOUT_REPO, overwrite_l
                     _write_atomic(target, reader.read(entry["blob"]))
                     files[rel] = _record(entry, os.stat(target))
                     summary["written"].append(rel)
+                    summary["written_details"].append({
+                        "target": rel, "path": entry["path"],
+                        "branch": entry["branch"], "commit": entry["commit"],
+                    })
                 except Cancelled:
                     raise
                 except Exception as e:

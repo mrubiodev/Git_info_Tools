@@ -2,7 +2,7 @@
 import hashlib
 
 from .commit_info import format_timestamp
-from .gitcmd import check_cancel, compile_regex, popen_git, run_git, unquote_path
+from .gitcmd import GitError, check_cancel, compile_regex, popen_git, run_git, unquote_path
 from .repo_cache import RepoCache
 
 SCOPE_REMOTE = "remote"
@@ -20,22 +20,13 @@ def list_branches(repo_path, scope=SCOPE_REMOTE, branch_regex=None, ignore_case=
     if scope not in SCOPES:
         raise ValueError(f"Ámbito de ramas desconocido: {scope}")
     rx = compile_regex(branch_regex, ignore_case)
-    # Try to return cached branches if requested and available
-    if db_path and use_cache:
-        try:
-            cache = RepoCache(db_path)
-            cached = cache.get_branches(repo_path)
-            if cached is not None:
-                # Apply regex filtering on the cached list for consistent behavior
-                if rx:
-                    return [b for b in cached if rx.search(b['name'])]
-                return cached
-        except Exception:
-            # If cache operations fail, continue to compute live data
-            pass
 
+    # Las referencias son baratas de consultar y deben leerse siempre en vivo:
+    # una caché compartida entre ámbitos podía ocultar main o devolver ramas
+    # eliminadas justo después de un fetch.
     out = run_git(repo_path, "for-each-ref",
                   "--format=%(refname)%00%(refname:short)%00%(objectname)", *SCOPES[scope])
+    default_refs = _default_branch_refs(repo_path)
     branches = []
     for line in out.decode("utf-8", "replace").splitlines():
         parts = line.split("\0")
@@ -44,7 +35,19 @@ def list_branches(repo_path, scope=SCOPE_REMOTE, branch_regex=None, ignore_case=
         ref, name, sha = parts
         if rx and not rx.search(name):
             continue
-        branches.append({"ref": ref, "name": name, "sha": sha})
+        branches.append({
+            "ref": ref,
+            "name": name,
+            "sha": sha,
+            "is_default": ref in default_refs,
+        })
+    if not any(branch["is_default"] for branch in branches):
+        for preferred in ("main", "master"):
+            matches = [branch for branch in branches
+                       if branch["name"] == preferred or branch["name"].endswith("/" + preferred)]
+            if matches:
+                matches[0]["is_default"] = True
+                break
 
     # Store into cache for later runs (best-effort)
     if db_path:
@@ -54,6 +57,18 @@ def list_branches(repo_path, scope=SCOPE_REMOTE, branch_regex=None, ignore_case=
         except Exception:
             pass
     return branches
+
+
+def _default_branch_refs(repo_path):
+    """Referencias local y remota de la rama predeterminada, si está configurada."""
+    try:
+        remote_ref = run_git(
+            repo_path, "symbolic-ref", "--quiet",
+            "refs/remotes/origin/HEAD").decode("utf-8", "replace").strip()
+    except GitError:
+        return set()
+    branch_name = remote_ref.rsplit("/", 1)[-1]
+    return {remote_ref, f"refs/heads/{branch_name}"}
 
 
 def refs_signature(branches):
@@ -136,12 +151,42 @@ def last_commits(repo_path, sha, wanted, cancel=None):
 
 
 def _pick_latest(entries):
-    entries.sort(key=lambda e: (-e["timestamp"], e["branch"]))
+    entries.sort(key=lambda e: (-e["timestamp"], not e.get("is_default", False), e["branch"]))
     best = dict(entries[0])
     best["date"] = format_timestamp(best["timestamp"])
-    best["same_in"] = [e["branch"] for e in entries[1:] if e["blob"] == best["blob"]]
+    best["same_in"] = [e["branch"] for e in entries if e is not entries[0] and e["blob"] == best["blob"]]
     best["branch_count"] = len(entries)
     return best
+
+
+def file_history(repo_path, path, branches, max_commits=100):
+    """Historial del fichero agrupado por rama para mostrarlo como árbol."""
+    history = []
+    for branch in branches:
+        out = run_git(
+            repo_path, "log", f"--max-count={max_commits}", "--date-order",
+            "--format=%H%x00%ct%x00%an%x00%s", branch["ref"], "--", path)
+        commits = []
+        for line in out.decode("utf-8", "replace").splitlines():
+            fields = line.split("\0", 3)
+            if len(fields) != 4:
+                continue
+            commit_hash, timestamp, author, message = fields
+            commits.append({
+                "commit": commit_hash,
+                "timestamp": int(timestamp or 0),
+                "date": format_timestamp(int(timestamp or 0)),
+                "author": author,
+                "message": message,
+            })
+        history.append({
+            "ref": branch["ref"],
+            "branch": branch["name"],
+            "is_default": branch.get("is_default", False),
+            "commits": commits,
+        })
+    history.sort(key=lambda item: (not item["is_default"], item["branch"].lower()))
+    return history
 
 
 def scan_latest(repo_path, scope=SCOPE_REMOTE, path_regex="", branch_regex="", ignore_case=True,
@@ -233,6 +278,7 @@ def scan_latest(repo_path, scope=SCOPE_REMOTE, path_regex="", branch_regex="", i
                 candidates.setdefault(path, []).append({
                     "path": path, "branch": branch["name"], "ref": branch["ref"], "blob": blob,
                     "commit": commit_hash, "timestamp": ts, "author": author, "message": message,
+                    "is_default": branch.get("is_default", False),
                 })
     else:
         for i, branch in enumerate(branches, 1):
@@ -252,6 +298,7 @@ def scan_latest(repo_path, scope=SCOPE_REMOTE, path_regex="", branch_regex="", i
                 candidates.setdefault(path, []).append({
                     "path": path, "branch": branch["name"], "ref": branch["ref"], "blob": blob,
                     "commit": commit_hash, "timestamp": ts, "author": author, "message": message,
+                    "is_default": branch.get("is_default", False),
                 })
     results = [_pick_latest(entries) for entries in candidates.values()]
     results.sort(key=lambda e: e["path"].lower())

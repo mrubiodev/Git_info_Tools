@@ -83,7 +83,7 @@ class LatestFilesTab:
         box.grid_columnconfigure(3, weight=1)
 
         tk.Label(box, text="Ramas:").grid(row=0, column=0, sticky="w")
-        self.scope_var = tk.StringVar(value="Remotas")
+        self.scope_var = tk.StringVar(value="Todas")
         self.scope_combo = ttk.Combobox(box, textvariable=self.scope_var, values=list(SCOPE_LABELS),
                                         state="readonly", width=10)
         self.scope_combo.grid(row=0, column=1, sticky="w", padx=5)
@@ -110,7 +110,10 @@ class LatestFilesTab:
             box, fg="#555555",
             text="1. Filtra y escanea   2. Marca los ficheros   3. Elige destino y descarga")
         self.filter_help.grid(row=2, column=0, columnspan=6, sticky="w")
-        ToolTip(self.scope_combo, "Elige si buscar en ramas remotas, locales o en ambas.")
+        ToolTip(
+            self.scope_combo,
+            "Todas incluye commits locales todavía no publicados y sus ramas remotas. "
+            "Remotas solo ve lo que ya existe en origin u otros remotos.")
         ToolTip(self.entry_branch_regex, "Limita las ramas por expresión regular. Vacío significa todas las ramas del ámbito elegido.")
         ToolTip(self.fetch_check, "Actualiza las referencias remotas antes de escanear. Requiere conexión al servidor Git.")
         ToolTip(self.icase_check, "Aplica la búsqueda de expresiones regulares sin distinguir mayúsculas y minúsculas.")
@@ -136,6 +139,7 @@ class LatestFilesTab:
             self.tree.tag_configure(tag, background=color)
         attach_context_menu(self.tree, [
             ("Ver detalles del fichero", self.show_selected_details),
+            ("Ver historial por ramas", self.show_file_history),
             ("Marcar/desmarcar filas seleccionadas", lambda: self.toggle_rows(self.tree.selection())),
             ("Copiar filas seleccionadas", self.copy_selection),
             ("Copiar todo el listado", self.copy_all),
@@ -208,6 +212,9 @@ class LatestFilesTab:
         self.button_details = tk.Button(actions, text="Ver detalles", width=14,
                                         command=self.show_selected_details)
         self.button_details.pack(side=tk.LEFT, padx=3)
+        self.button_history = tk.Button(actions, text="Historial por ramas", width=18,
+                                        command=self.show_file_history)
+        self.button_history.pack(side=tk.LEFT, padx=3)
         self.action_buttons = []
         for text, command, tooltip in (
                 ("Descargar marcados", lambda: self.download(checked_only=True),
@@ -229,6 +236,7 @@ class LatestFilesTab:
         ToolTip(self.overwrite_check, "Si está desmarcado, los ficheros editados localmente no se sobrescriben.")
         ToolTip(self.button_check, "Compara cada fichero del destino con la versión actual y el manifiesto de descargas.")
         ToolTip(self.button_details, "Muestra fecha, commit, autor, mensaje y ramas donde existe el mismo contenido.")
+        ToolTip(self.button_history, "Muestra un árbol del fichero con sus commits agrupados por rama.")
 
     def _build_status(self, parent):
         bar = tk.Frame(parent)
@@ -309,6 +317,8 @@ class LatestFilesTab:
         self.app.log(f"\nEscaneando últimas versiones en '{params['repo_path']}' "
                      f"(ramas: {self.scope_var.get()}, ficheros: '{params['path_regex'] or '*'}', "
                      f"regex ramas: '{params['branch_regex'] or '*'}')...")
+        if params["scope"] == latest_scan.SCOPE_REMOTE:
+            self.app.log("Aviso: el ámbito Remotas no incluye commits locales que todavía no se hayan publicado con push.")
         self._start(lambda progress, cancel: scan_job(params, progress, cancel),
                     lambda result: self._on_scan_done(params, result, mark), "Escaneando ramas...")
 
@@ -422,17 +432,12 @@ class LatestFilesTab:
         self.label_count.config(text=f"{len(self.results)} ficheros, {len(self.checked)} marcados")
 
     def show_selected_details(self, event=None):
-        selection = self.tree.selection()
-        if not selection and event is not None:
-            iid = self.tree.identify_row(event.y)
-            if iid:
-                self.tree.selection_set(iid)
-                selection = (iid,)
+        selection = self._selected_file(event)
         if not selection:
             messagebox.showwarning("Detalles", "Selecciona un fichero para ver sus detalles.")
             return
 
-        entry = self.entries[selection[0]]
+        entry = self.entries[selection]
         same_in = ", ".join(entry["same_in"]) or "Ninguna otra rama"
         details = (
             f"Fichero: {entry['path']}\n"
@@ -446,6 +451,81 @@ class LatestFilesTab:
             f"Ramas donde existe: {entry['branch_count']}")
         show_text_window(self.app.root, f"Detalles del fichero: {entry['path']}", details,
                          geometry="900x420")
+
+    def _selected_file(self, event=None):
+        selection = self.tree.selection()
+        if not selection and event is not None:
+            iid = self.tree.identify_row(event.y)
+            if iid:
+                self.tree.selection_set(iid)
+                selection = (iid,)
+        return selection[0] if selection else None
+
+    def show_file_history(self):
+        iid = self._selected_file()
+        if not iid:
+            messagebox.showwarning("Historial", "Selecciona un fichero para ver su historial.")
+            return
+        if not self.scan_params:
+            messagebox.showwarning("Historial", "Primero escanea las ramas.")
+            return
+        entry = self.entries[iid]
+        params = self.scan_params
+        self._start(
+            lambda progress, cancel: self._load_file_history(entry["path"], params, progress, cancel),
+            lambda history: self._show_file_history_window(entry["path"], history),
+            f"Cargando historial de {entry['path']}...")
+
+    @staticmethod
+    def _load_file_history(path, params, progress, cancel):
+        branches = latest_scan.list_branches(
+            params["repo_path"], params["scope"], params["branch_regex"],
+            params["ignore_case"], db_path=params.get("db_path"))
+        progress(f"Leyendo historial de '{path}' en {len(branches)} ramas...")
+        if cancel():
+            raise Cancelled()
+        return latest_scan.file_history(params["repo_path"], path, branches)
+
+    def _show_file_history_window(self, path, history):
+        window = tk.Toplevel(self.app.root)
+        window.title(f"Historial por ramas: {path}")
+        window.geometry("1150x650")
+        tk.Label(window, text=path, font=("Arial", 10, "bold"), anchor="w").pack(
+            fill="x", padx=10, pady=(10, 4))
+        tree = ttk.Treeview(
+            window, columns=("date", "commit", "author", "message"),
+            show="tree headings")
+        tree.heading("#0", text="Rama / commit")
+        tree.heading("date", text="Fecha")
+        tree.heading("commit", text="Commit")
+        tree.heading("author", text="Autor")
+        tree.heading("message", text="Mensaje")
+        tree.column("#0", width=310)
+        tree.column("date", width=145)
+        tree.column("commit", width=95)
+        tree.column("author", width=150)
+        tree.column("message", width=390)
+        scroll_y = ttk.Scrollbar(window, orient="vertical", command=tree.yview)
+        scroll_x = ttk.Scrollbar(window, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 0))
+        scroll_y.place(relx=1.0, rely=0.06, relheight=0.88, anchor="ne")
+        scroll_x.pack(fill="x", padx=10, pady=(0, 10))
+
+        for branch in history:
+            label = branch["branch"] + ("  [principal]" if branch["is_default"] else "")
+            parent = tree.insert("", "end", text=label, open=branch["is_default"],
+                                 values=("", "", "", f"{len(branch['commits'])} cambios"))
+            if not branch["commits"]:
+                tree.insert(parent, "end", text="Sin cambios propios en el historial disponible",
+                            values=("", "", "", ""))
+                continue
+            for commit in branch["commits"]:
+                tree.insert(
+                    parent, "end", text=commit["commit"][:7],
+                    values=(commit["date"], commit["commit"][:12],
+                            commit["author"], commit["message"]))
+        self._set_status(f"Historial cargado para '{path}' en {len(history)} ramas.")
 
     def _refresh_marks(self, iids=None):
         for iid in (self.entries if iids is None else iids):
@@ -587,7 +667,7 @@ class LatestFilesTab:
 
     def load_saved(self, search):
         self.app.set_repo_path(search["repo_path"])
-        self.scope_var.set(SCOPE_BY_VALUE.get(search["scope"], "Remotas"))
+        self.scope_var.set(SCOPE_BY_VALUE.get(search["scope"], "Todas"))
         for entry, value in ((self.entry_path_regex, search["path_regex"]),
                              (self.entry_branch_regex, search["branch_regex"]),
                              (self.entry_dest, search["dest_dir"])):

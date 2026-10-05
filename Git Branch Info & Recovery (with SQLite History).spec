@@ -6,7 +6,7 @@ datas += collect_data_files('TKinterModernThemes')
 
 
 a = Analysis(
-    ['M:\\new_mrubiodev\\Git_info_Tools\\main.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -39,5 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['M:\\new_mrubiodev\\Git_info_Tools\\res\\app_icon.ico'],
+    icon=['res\\app_icon.ico'],
 )

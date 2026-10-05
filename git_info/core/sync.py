@@ -2,7 +2,6 @@
 import subprocess
 
 from . import exporter, latest_scan
-from .repo_cache import RepoCache
 from .gitcmd import GitError, fetch_all
 from .saved_searches import is_due, now_text
 
@@ -27,7 +26,8 @@ def run_saved_search(store, search, force=False, progress=None, cancel=None, par
     try:
         return _run(store, search, force, progress, cancel, parallel, max_workers)
     except Exception as e:
-        store.update(search["id"], last_run=now_text(), last_result=f"Error: {e}")
+        store.update(search["id"], last_run=now_text(), last_result=f"Error: {e}",
+                     last_details={"error": str(e)})
         raise
 
 
@@ -51,7 +51,8 @@ def _run(store, search, force, progress, cancel, parallel=False, max_workers=4):
 
     if not force and signature == search.get("refs_signature"):
         text = _with_warnings("Sin cambios en las ramas", warnings)
-        store.update(search["id"], last_run=now_text(), last_result=text)
+        store.update(search["id"], last_run=now_text(), last_result=text,
+                     last_details={"warnings": warnings, "note": "No hubo descargas en esta ejecución."})
         return _result(text, warnings=warnings)
 
     results, _ = latest_scan.scan_latest(repo, search["scope"], search["path_regex"],
@@ -68,9 +69,12 @@ def _run(store, search, force, progress, cancel, parallel=False, max_workers=4):
                                       search["overwrite_local"], progress=progress, cancel=cancel)
     summary.update(missing=missing, warnings=warnings, changed=True)
     summary["text"] = _with_warnings(exporter.summary_text(summary), warnings)
+    summary["downloaded"] = summary["written_details"]
+    details = {key: summary[key] for key in ("downloaded", "unchanged", "conflicts",
+                                             "missing", "errors", "warnings")}
     # Con errores no se guarda la huella, para reintentar en la siguiente pasada.
     store.update(search["id"], last_run=now_text(), last_result=summary["text"],
-                 refs_signature=None if summary["errors"] else signature)
+                 last_details=details, refs_signature=None if summary["errors"] else signature)
     return summary
 
 

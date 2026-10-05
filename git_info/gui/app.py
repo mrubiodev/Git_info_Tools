@@ -11,6 +11,8 @@ try:
     from ..core.branch_store import BranchStore
     from ..core.formatting import format_branch_report
     from ..core.saved_searches import SavedSearchStore
+    from ..core.repo_automations import RepositoryAutomationStore
+    from .automations_tab import AutomationsTab
     from .background import BackgroundRunner
     from .batch_tab import BatchTab
     from .console_tab import ConsoleTab, FetchProgress
@@ -30,6 +32,8 @@ except Exception:
     from git_info.core.branch_store import BranchStore
     from git_info.core.formatting import format_branch_report
     from git_info.core.saved_searches import SavedSearchStore
+    from git_info.core.repo_automations import RepositoryAutomationStore
+    from git_info.gui.automations_tab import AutomationsTab
     from git_info.gui.background import BackgroundRunner
     from git_info.gui.batch_tab import BatchTab
     from git_info.gui.console_tab import ConsoleTab, FetchProgress
@@ -47,6 +51,7 @@ class GitBranchInfoApp:
         self.db_path = db_path
         self.branch_store = BranchStore(db_path)
         self.saved_store = SavedSearchStore(db_path)
+        self.automation_store = RepositoryAutomationStore(db_path)
         self.runner = BackgroundRunner(root)
 
         self.root.grid_rowconfigure(0, weight=0)
@@ -61,6 +66,7 @@ class GitBranchInfoApp:
         self.search_tab = SearchTab(self, self.notebook, self.branch_store)
         self.batch_tab = BatchTab(self, self.notebook, self.branch_store)
         self.latest_tab = LatestFilesTab(self, self.notebook, self.saved_store)
+        self.automations_tab = AutomationsTab(self, self.notebook, self.automation_store, self.saved_store)
         # Keyboard shortcuts for navigation
         try:
             self.root.bind_all("<Control-f>", lambda e: self.search_tab.focus_search())
@@ -74,7 +80,8 @@ class GitBranchInfoApp:
         top.grid(row=0, column=0, sticky="ew")
         top.grid_columnconfigure(1, weight=1)
         tk.Label(top, text="Ruta del Repositorio Git:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.entry_path = tk.Entry(top, width=70)
+        self.repo_path_var = tk.StringVar()
+        self.entry_path = tk.Entry(top, width=70, textvariable=self.repo_path_var)
         self.entry_path.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         # Browse button (keep a reference for tooltip)
         browse_btn = tk.Button(top, text="Examinar", command=lambda: browse_into(self.entry_path))
@@ -109,6 +116,7 @@ class GitBranchInfoApp:
         for message in self.branch_store.init():
             self.display_message(message, append=False)
         self.saved_store.init()
+        self.automation_store.init()
 
     # ---- API común para las pestañas
     def display_message(self, message, append=False):

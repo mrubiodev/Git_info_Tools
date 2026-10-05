@@ -9,9 +9,10 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 COLUMNS = ("id", "name", "repo_path", "scope", "path_regex", "branch_regex", "ignore_case",
            "selected_paths", "dest_dir", "layout", "overwrite_local", "fetch_before",
            "auto_sync", "interval_minutes", "created_at", "last_run", "last_result",
-           "refs_signature")
+           "refs_signature", "last_details")
 _BOOL_COLUMNS = ("ignore_case", "overwrite_local", "fetch_before", "auto_sync")
-_UPDATABLE = {"auto_sync", "interval_minutes", "last_run", "last_result", "refs_signature"}
+_UPDATABLE = {"auto_sync", "interval_minutes", "last_run", "last_result", "refs_signature",
+              "last_details"}
 
 
 def now_text():
@@ -61,14 +62,19 @@ class SavedSearchStore:
                 created_at TEXT,
                 last_run TEXT,
                 last_result TEXT,
-                refs_signature TEXT -- huella de las ramas en la última ejecución correcta
+                refs_signature TEXT, -- huella de las ramas en la última ejecución correcta
+                last_details TEXT -- JSON de la última ejecución (ficheros y errores)
             )
         """)
+        columns = {row[1] for row in self._execute("PRAGMA table_info(saved_searches)")}
+        if "last_details" not in columns:
+            self._execute("ALTER TABLE saved_searches ADD COLUMN last_details TEXT")
 
     @staticmethod
     def _to_dict(row):
         data = dict(zip(COLUMNS, row))
         data["selected_paths"] = json.loads(data["selected_paths"]) if data["selected_paths"] else None
+        data["last_details"] = json.loads(data["last_details"]) if data["last_details"] else None
         for key in _BOOL_COLUMNS:
             data[key] = bool(data[key])
         return data
@@ -99,7 +105,7 @@ class SavedSearchStore:
                 dest_dir = excluded.dest_dir, layout = excluded.layout,
                 overwrite_local = excluded.overwrite_local, fetch_before = excluded.fetch_before,
                 auto_sync = excluded.auto_sync, interval_minutes = excluded.interval_minutes,
-                refs_signature = NULL
+                refs_signature = NULL, last_run = NULL, last_result = NULL, last_details = NULL
         """, (
             search["name"], search["repo_path"], search["scope"], search.get("path_regex", ""),
             search.get("branch_regex", ""), int(search.get("ignore_case", True)),
@@ -112,6 +118,8 @@ class SavedSearchStore:
 
     def update(self, search_id, **fields):
         fields = {k: (int(v) if isinstance(v, bool) else v) for k, v in fields.items() if k in _UPDATABLE}
+        if "last_details" in fields and fields["last_details"] is not None:
+            fields["last_details"] = json.dumps(fields["last_details"], ensure_ascii=False)
         if fields:
             assignments = ", ".join(f"{k} = ?" for k in fields)
             self._execute(f"UPDATE saved_searches SET {assignments} WHERE id = ?",
