@@ -1,12 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
+from pathlib import Path
 
-datas = []
+root = Path(SPECPATH)
+datas = [(str(root / 'res' / 'app_icon.ico'), 'res')]
 datas += collect_data_files('TKinterModernThemes')
 
 
 a = Analysis(
-    ['main.py'],
+    [str(root / 'main.py')],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -39,5 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['res\\app_icon.ico'],
+    icon=[str(root / 'res' / 'app_icon.ico')],
 )

@@ -1,7 +1,7 @@
 # Git Branch Info & Recovery
 
 ![Estado](https://img.shields.io/badge/estado-En%20desarrollo-yellow)
-![Versión](https://img.shields.io/badge/versión-V26.09.028-blue)
+![Versión](https://img.shields.io/badge/versión-V26.10.029-blue)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Git](https://img.shields.io/badge/Git-requerido-F05032?logo=git&logoColor=white)
 ![Tkinter](https://img.shields.io/badge/GUI-Tkinter-444444)
@@ -31,6 +31,11 @@ segura a otra carpeta.
   comandos.
 - Mantiene repositorios completos actualizados desde una rama remota mediante
   fast-forward, con automatizaciones configurables por carpeta y una vista global.
+- Exporta e importa automatizaciones en JSON para compartirlas.
+- Pide la passphrase de claves SSH cifradas cuando el fetch falla por
+  autenticación y la mantiene en un `ssh-agent` de la sesión.
+- Incluye una **versión Lite** (`main_lite.py`) solo con las automatizaciones,
+  pensada para dejarla abierta como planificador.
 - Registra ramas y resultados en SQLite.
 - Busca posibles ramas eliminadas utilizando el reflog local.
 - Copia resultados y los exporta a Excel.
@@ -55,8 +60,19 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+Para abrir solo la gestión de automatizaciones: `python main_lite.py`
+(ver [Versión Lite](#versión-lite-solo-automatizaciones)).
+
 También se puede ejecutar `CreateEnv.bat`, pero ese script vuelve a crear el
 entorno `.venv`. Utiliza los comandos manuales si necesitas conservarlo.
+
+## Novedades V26.10.029
+
+- **Credenciales SSH**: si `fetch` falla con `Permission denied (publickey)`
+  porque la clave tiene passphrase, la GUI la pide, la carga en un `ssh-agent`
+  de sesión y reintenta. Botón **Credenciales SSH...** en Automatizaciones; la
+  CLI la pide por consola si hay terminal interactiva.
+- **Versión Lite**: `main_lite.py` / `--lite` y `empaquetar_lite.bat`.
 
 ## Flujo recomendado
 
@@ -183,6 +199,7 @@ Una búsqueda guardada conserva:
 - selección completa o rutas marcadas;
 - carpeta y estructura de destino;
 - política de sobrescritura;
+- política ante fallos de fetch (`stop` o `local`);
 - intervalo de sincronización automática.
 
 La sincronización compara la huella de las puntas de las ramas. Si no hay
@@ -219,14 +236,96 @@ pausarla, ejecutarla manualmente, consultar detalles o eliminarla sin borrar
 los ficheros del repositorio.
 
 Cada ejecución descarga la rama remota configurada con `fetch` e incorpora
-los commits solo mediante **fast-forward**. No cambia de rama, no publica
-commits, ni hace stash, reset o merge de historiales divergentes. Se bloquea
-si la rama elegida no está activa (incluido HEAD separado), hay cambios
-locales, ficheros sin seguimiento, commits locales pendientes u operaciones
-Git en curso. Los ficheros ignorados tampoco se sobrescriben por una descarga.
-Un fallo de conexión no se trata como «al día» ni se usan referencias antiguas
-para actualizar. El resultado y los commits anterior/remoto/final se guardan
-en SQLite.
+los commits solo mediante **fast-forward** (el equivalente a un pull sin crear
+un commit de merge). **Nunca crea commits de rama ni hace push**, reset,
+cambio de rama o merge de historiales divergentes. Los hooks de merge se
+desactivan en esta operación para evitar acciones automáticas externas.
+Se bloquea si la rama elegida no está activa (incluido HEAD separado), hay
+commits locales pendientes, conflictos sin resolver u operaciones Git en curso.
+Los ficheros ignorados tampoco se sobrescriben por una descarga.
+Un fallo de conexión nunca se trata como «al día». El resultado y los commits
+anterior/de referencia/final se guardan en SQLite.
+
+### Si falla fetch (repositorios y búsquedas guardadas)
+
+Elige **Si falla fetch** al crear/editar una tarea o con el botón del mismo
+nombre en **Automatizaciones** y **Búsquedas guardadas**:
+
+- **Detener (`stop`, predeterminado)**: no escanea, descarga, crea stash ni
+  incorpora commits después del fallo. Las tareas existentes y los JSON antiguos
+  sin esta opción pasan también a `stop`; las búsquedas ya no continúan por defecto.
+- **Continuar (`local`)**: autoriza explícitamente el uso de referencias locales
+  posiblemente obsoletas. En repositorios solo permite fast-forward hacia el
+  commit de la referencia remota configurada que existía **antes** de intentar
+  fetch. Si esa referencia no existe, falla: no cambia a otro remoto ni a `FETCH_HEAD`.
+  Conserva todas las protecciones de rama activa, divergencia, trabajo local y stash.
+  En búsquedas puede escanear/descargar según las referencias disponibles localmente.
+
+El resultado comienza con **REMOTO NO ACTUALIZADO**, incluso si no hay cambios
+locales o si la descarga/fast-forward termina. El error original y los avisos se
+guardan en los detalles, también si falla una operación posterior. Nunca confirma
+que el servidor esté al día. Si la búsqueda tiene **Hacer fetch antes** desactivado,
+esta política no interviene: no se intenta contactar con el remoto.
+
+#### Credenciales SSH (clave con passphrase)
+
+La aplicación ejecuta Git sin consola, así que `ssh` no puede pedir la passphrase
+de una clave cifrada y el fetch falla con `Permission denied (publickey)`. Cuando
+ocurre, la GUI pide la passphrase, la carga en un `ssh-agent` propio de la sesión
+(el de Git for Windows, con las claves `~/.ssh/id_*`) y reintenta la operación. La
+passphrase solo queda en memoria; el agente se cierra al salir. Si cancelas, las
+ejecuciones automáticas no vuelven a preguntar: usa **Credenciales SSH...** en
+**Automatizaciones**. En la CLI se pide por consola si hay terminal interactiva;
+en el Programador de tareas, carga la clave en un agente o usa una clave sin passphrase.
+
+En **Editar**, elige la política de **Cambios locales**:
+
+| Política | Comportamiento |
+|---|---|
+| **Sincronizar conservando cambios locales** | Incorpora lo nuevo sin preguntar, conservando cambios preparados, no preparados y ficheros sin seguimiento cuando Git lo permite. Si necesita sobrescribir trabajo local, se bloquea sin descartarlo. No hace stash. |
+| **Guardar cambios locales en stash y actualizar** | Guarda cambios preparados/no preparados y ficheros sin seguimiento antes del fast-forward. Puedes dejarlos guardados para recuperación manual o activar **Reaplicar automáticamente el stash**. |
+| **Bloquear si hay cambios locales** | Mantiene la protección anterior: no descarga si hay cambios o ficheros sin seguimiento. |
+
+Las nuevas tareas proponen **Sincronizar**; las existentes conservan **Bloquear**
+hasta que las edites. La sincronización directa es conservadora: Git puede
+bloquear cambios locales en un fichero que también cambia en el remoto aunque
+estén en líneas diferentes. Para combinar ese trabajo, utiliza stash con
+reaplicación. Stash crea objetos internos de respaldo de Git, no commits en
+la rama ni publicaciones al servidor. No incluye ficheros ignorados ni trabajo
+dentro de submódulos; si estos tienen cambios, el modo stash se bloquea.
+Si no hay novedades remotas, no se crea ningún stash.
+
+Si falla la actualización después de guardar el stash, se intenta restaurar
+el trabajo original. Si falla la reaplicación, se conserva el stash y se muestra
+el error junto con su SHA; pueden quedar cambios parcialmente aplicados o
+conflictos en la carpeta. No se repite la operación mientras quede ese trabajo:
+resuelve el problema y, para reanudar con cambios locales, vuelve a guardar la
+configuración. Los conflictos Git sin resolver siempre bloquean. Los stashes
+anteriores no se eliminan. Los detalles indican el stash creado; para recuperarlo
+manualmente usa `git stash apply --index <SHA>` y elimina su entrada solo después
+de comprobar que el trabajo está recuperado.
+
+### Compartir automatizaciones
+
+Selecciona varias filas con **Ctrl/Mayús** y pulsa **Exportar seleccionadas**.
+El JSON versionado incluye solo la configuración de las tareas elegidas,
+tanto repositorios como búsquedas guardadas: no exporta identificadores de
+SQLite, historial de ejecuciones, resultados ni contenido del repositorio.
+Incluye rutas locales y filtros: revisa el archivo antes de compartirlo.
+
+Con **Importar...**, abre el JSON y selecciona las tareas deseadas en la vista
+previa. El doble clic o **Ajustar seleccionada** permite cambiar nombre, rutas,
+intervalo y activación; en repositorios también ramas, remoto, política de
+cambios locales y reaplicación del stash. Incluye la política `fetch_failure`
+para ambos tipos; si falta en un JSON versión 1, se usa `stop`. La vista de
+ajustes permite cambiarla antes de importar. Por defecto se conservan las rutas
+y la activación originales: **las tareas automáticas pueden ejecutarse en la
+siguiente revisión del planificador**. Comprueba la configuración antes de aceptar.
+Las rutas de repositorio deben existir en el equipo receptor.
+No se reemplazan duplicados por nombre (del mismo tipo) ni por carpeta de
+repositorio: cambia el nombre/ruta o desmarca la tarea. La importación es
+atómica: si una tarea no es válida, no se guarda ninguna. Cancelar no cambia
+la base de datos. Puedes editar los filtros de búsquedas desde su vista habitual.
 
 La aplicación revisa las tareas cada 30 segundos, con primera revisión a los
 5 segundos, y ejecuta las que han cumplido su intervalo. **Ejecutar ahora**
@@ -244,6 +343,25 @@ el estado local después de descargar y antes de incorporar los commits.
 No se actualizan automáticamente los repositorios de submódulos ni se
 materializa Git LFS explícitamente; se aplica el comportamiento de checkout
 y los filtros configurados en Git.
+
+### Versión Lite (solo automatizaciones)
+
+Para dejar la aplicación abierta solo como planificador, usa la GUI ligera:
+
+```powershell
+python main_lite.py            # equivalente a: python main.py --lite
+python main_lite.py --db C:\datos\git_branches.db
+```
+
+Muestra únicamente **Automatizaciones** (repositorios y búsquedas guardadas) y
+una **Consola** con el registro. Permite añadir, editar, ejecutar, activar/pausar,
+cambiar intervalo y política de fetch, eliminar, importar/exportar e introducir
+**Credenciales SSH**. Usa la misma base SQLite que la versión completa y ejecuta
+el mismo planificador. Los filtros y el destino de una búsqueda guardada se
+editan en la versión completa. Para generar el EXE: `empaquetar_lite.bat`
+(mismos argumentos que `empaquetar.bat`; crea `<Proyecto>_Lite.exe`).
+No abras a la vez la versión completa y la Lite con auto activado sobre la misma
+base: ambas ejecutarían el planificador.
 
 ## Línea de comandos
 
@@ -280,13 +398,26 @@ python main.py --update-repos
 
 # Ejecutar ambos tipos de automatización en una pasada
 python main.py --update-repos --sync-all
+
+# Autorizar referencias posiblemente obsoletas solo para esta pasada (no cambia SQLite)
+python main.py --update-repo "Mi repositorio" --sync "Mi búsqueda" --fetch-failure local
+
+# Exigir detenerse en esta pasada aunque las tareas tengan configurado continuar
+python main.py --update-repos --sync-all --fetch-failure stop
+
+# Abrir la GUI Lite (solo automatizaciones); equivale a python main_lite.py
+python main.py --lite
 ```
 
-El código 1 indica errores de ejecución, fallos de descarga o una actualización
+El código 1 indica errores de ejecución, fallos de fetch (incluso si se continuó
+con referencias locales), fallos de descarga o una actualización
 de repositorio bloqueada. El código 2 indica una búsqueda o automatización
 inexistente. `--force` solo afecta al escaneo de búsquedas; nunca permite
 sobrescribir trabajo local ni omitir la seguridad de los repositorios.
 `--sync-all` conserva su comportamiento: ejecuta únicamente búsquedas guardadas.
+Si un fetch falla por una clave SSH con passphrase y hay terminal interactiva,
+la CLI pide la passphrase una vez (hasta 3 intentos) y reintenta; sin terminal
+el fallo se informa con código 1.
 
 ## Análisis y recuperación de ramas
 
@@ -329,6 +460,16 @@ tipo de rama. No sustituye al historial de commits de Git.
 La base puede contener rutas locales, autores y mensajes de commit. Revísala
 antes de compartirla.
 
+### Icono del ejecutable y las ventanas
+
+El empaquetado incorpora `res/app_icon.ico` tanto como icono del EXE como
+recurso interno para las ventanas Tkinter. La GUI usa ese recurso también
+en modo PyInstaller y define su identidad de aplicación en Windows para
+la barra de tareas. El ICO incluye tamaños de 16, 32, 48, 64 y 256 píxeles.
+Si el Explorador conserva un icono antiguo después de
+reemplazar el EXE, comprueba una copia con otro nombre: puede ser su caché
+de iconos, no el contenido del ejecutable.
+
 ### Protección frente a fugas de datos
 
 El repositorio ignora bases SQLite, manifiestos de descargas, ficheros `.env`,
@@ -346,9 +487,11 @@ publicaciones, pero no reescribe commits anteriores.
 
 ```text
 main.py
+main_lite.py                     GUI ligera (solo automatizaciones)
 git_info/
 ├── cli.py                       Entrada CLI y sincronización sin GUI
 ├── core/
+│   ├── automation_transfer.py   Exportación/importación JSON de automatizaciones
 │   ├── branch_scanner.py        Ramas remotas y candidatos del reflog
 │   ├── branch_store.py          Persistencia y consultas SQLite
 │   ├── commit_info.py           Metadatos de commits
@@ -359,20 +502,26 @@ git_info/
 │   ├── repo_cache.py            Caché por repositorio y commit
 │   ├── repo_automations.py      Actualización segura y persistencia de repositorios
 │   ├── saved_searches.py        Persistencia de búsquedas
+│   ├── ssh_auth.py              ssh-agent de sesión para claves con passphrase
 │   └── sync.py                  Sincronización incremental
 └── gui/
     ├── app.py                   Ventana principal
+    ├── lite_app.py              Ventana Lite: solo automatizaciones
+    ├── credentials.py           Petición de passphrase SSH y reintento
     ├── automations_tab.py       Vista de automatizaciones por carpeta o global
     ├── latest_tab.py            Exploración y descarga de versiones
     ├── search_tab.py            Búsqueda en SQLite
     ├── batch_tab.py             Consultas por lotes
     └── ...                      Diálogos, widgets y tareas en segundo plano
 tests/
+├── test_automation_transfer.py
 ├── test_automations_gui.py
 ├── test_exporter_status.py
 ├── test_latest_scan.py
+├── test_lite_app.py
 ├── test_repo_automations.py
-└── test_saved_search_details.py
+├── test_saved_search_details.py
+└── test_ssh_auth.py
 ```
 
 La lógica de `git_info/core` no depende de Tkinter y puede reutilizarse desde
@@ -410,8 +559,13 @@ Comprobar que todos los módulos compilan:
 - Los renombrados se tratan como rutas distintas durante el escaneo de últimas
   versiones.
 - El escaneo paralelo es experimental.
-- La sincronización automática integrada requiere que la GUI permanezca
-  abierta; para ejecución desatendida debe usarse la CLI.
+- La sincronización automática integrada requiere que la GUI (completa o Lite)
+  permanezca abierta; para ejecución desatendida debe usarse la CLI.
+- En ejecución desatendida no se puede pedir la passphrase SSH: usa un agente
+  con la clave cargada o una clave sin passphrase.
+- La passphrase introducida en la GUI solo dura la sesión; al cerrar la
+  aplicación se detiene su `ssh-agent`.
+- `test_repo_automations.py` usa repositorios Git reales y tarda varios minutos.
 
 ## Licencia
 

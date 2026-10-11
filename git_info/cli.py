@@ -14,6 +14,8 @@ from . import DEFAULT_DB_PATH
 def build_parser():
     parser = argparse.ArgumentParser(description="Git Branch Info & Recovery")
     parser.add_argument("--db", default=DEFAULT_DB_PATH, help="Ruta de la base de datos SQLite")
+    parser.add_argument("--lite", action="store_true",
+                        help="Abre la GUI ligera: solo automatizaciones y su gestión")
     parser.add_argument("--parallel", action="store_true",
                         help="Habilita escaneo paralelo (experimental)")
     parser.add_argument("--workers", type=int, default=4,
@@ -25,6 +27,9 @@ def build_parser():
                         help="Ejecuta todas las búsquedas con sincronización automática activada")
     parser.add_argument("--force", action="store_true",
                         help="Escanea y descarga aunque las ramas no hayan cambiado")
+    parser.add_argument("--fetch-failure", choices=("stop", "local"),
+                        help="Solo esta ejecución: detener si falla fetch o usar referencias locales "
+                             "posiblemente obsoletas (también autoriza fast-forward local)")
     parser.add_argument("--list-automations", action="store_true",
                         help="Lista automatizaciones de repositorios y búsquedas guardadas")
     parser.add_argument("--update-repo", action="append", metavar="NOMBRE_O_ID",
@@ -40,22 +45,54 @@ def _list(store):
         auto = f"auto cada {s['interval_minutes']} min" if s["auto_sync"] else "manual"
         print(f"[{s['id']}] {s['name']} | {s['repo_path']} | {describe_filter(s)} | "
               f"{describe_selection(s)} -> {s['dest_dir']} | {auto} | {s['last_run'] or '-'}: {s['last_result'] or '-'}")
+        print(f"    Si falla fetch: {s.get('fetch_failure', 'stop')} "
+              f"(fetch previo: {'sí' if s['fetch_before'] else 'no'})")
     return 0
 
 
-def _sync(store, searches, force, parallel=False, workers=4):
+def _ssh_retry(texts, state):
+    """En consola interactiva, pide la passphrase SSH una vez y devuelve True para reintentar."""
+    from .core import ssh_auth
+    if state.get("asked") or not sys.stdin or not sys.stdin.isatty():
+        return False
+    if not any(ssh_auth.is_ssh_key_error(text) for text in texts if text):
+        return False
+    state["asked"] = True
+    import getpass
+    for _ in range(3):
+        passphrase = getpass.getpass("Passphrase de la clave SSH (vacío para omitir): ")
+        if not passphrase:
+            return False
+        try:
+            keys = ssh_auth.load_keys(passphrase)
+            print(f"Credenciales SSH: {len(keys)} clave(s) cargada(s); reintentando.")
+            return True
+        except ssh_auth.SshAuthError as error:
+            print(f"Credenciales SSH: {error}", file=sys.stderr)
+    return False
+
+
+def _sync(store, searches, force, parallel=False, workers=4, ssh_state=None):
     from .core.sync import run_saved_search
+    ssh_state = {} if ssh_state is None else ssh_state
     exit_code = 0
     for search in searches:
-        try:
-            summary = run_saved_search(store, search, force=force, progress=print,
-                                       parallel=parallel, max_workers=workers)
-            print(f"[{search['name']}] {summary['text']}")
-            if summary["errors"]:
+        for attempt in range(2):
+            try:
+                summary = run_saved_search(store, search, force=force, progress=print,
+                                           parallel=parallel, max_workers=workers)
+            except Exception as e:
+                if attempt == 0 and _ssh_retry([str(e)], ssh_state):
+                    continue
+                print(f"[{search['name']}] Error: {e}", file=sys.stderr)
                 exit_code = 1
-        except Exception as e:
-            print(f"[{search['name']}] Error: {e}", file=sys.stderr)
-            exit_code = 1
+                break
+            if attempt == 0 and _ssh_retry(summary.get("warnings", []), ssh_state):
+                continue
+            print(f"[{search['name']}] {summary['text']}")
+            if summary["errors"] or summary.get("warnings"):
+                exit_code = 1
+            break
     return exit_code
 
 
@@ -70,6 +107,9 @@ def run_cli(args):
         for item in automations.list():
             print(f"[repo:{item['id']}] {item['name']} | {item['repo_path']} | "
                   f"{item['branch']} <- {item['remote']}/{item['remote_branch']} | "
+                  f"cambios locales: {item['local_changes']} | "
+                  f"reaplicar stash: {'sí' if item['restore_stash'] else 'no'} | "
+                  f"si falla fetch: {item.get('fetch_failure', 'stop')} | "
                   f"{'auto' if item['auto_sync'] else 'manual'} cada {item['interval_minutes']} min | "
                   f"{item['last_run'] or '-'}: {item['last_result'] or '-'}")
         return _list(store)
@@ -95,18 +135,29 @@ def run_cli(args):
         searches.append(search)
     if args.sync_all:
         searches += [s for s in store.list() if s["auto_sync"] and s not in searches]
+    if getattr(args, "fetch_failure", None):
+        repositories = [dict(item, fetch_failure=args.fetch_failure) for item in repositories]
+        searches = [dict(item, fetch_failure=args.fetch_failure) for item in searches]
     exit_code = 0
+    ssh_state = {}
     for automation in repositories:
-        try:
-            result = run_repository_automation(automations, automation, progress=print)
-            print(f"[{automation['name']}] {result['text']}")
-            if result["status"] == "blocked":
+        for attempt in range(2):
+            try:
+                result = run_repository_automation(automations, automation, progress=print)
+            except Exception as error:
+                if attempt == 0 and _ssh_retry([str(error)], ssh_state):
+                    continue
+                print(f"[{automation['name']}] Error: {error}", file=sys.stderr)
                 exit_code = 1
-        except Exception as error:
-            print(f"[{automation['name']}] Error: {error}", file=sys.stderr)
-            exit_code = 1
+                break
+            if attempt == 0 and _ssh_retry(result.get("warnings", []), ssh_state):
+                continue
+            print(f"[{automation['name']}] {result['text']}")
+            if result["status"] in ("blocked", "conflict") or result.get("warnings"):
+                exit_code = 1
+            break
     return max(exit_code, _sync(store, searches, args.force,
-                                parallel=args.parallel, workers=args.workers))
+                                parallel=args.parallel, workers=args.workers, ssh_state=ssh_state))
 
 
 def main(argv=None):
@@ -114,6 +165,10 @@ def main(argv=None):
     if (args.list or args.sync or args.sync_all or args.list_automations
             or args.update_repo or args.update_repos):
         return run_cli(args)
+    if args.lite:
+        from .gui.lite_app import run_lite_gui
+        run_lite_gui(args.db)
+        return 0
     from .gui.app import run_gui
     run_gui(args.db)
     return 0

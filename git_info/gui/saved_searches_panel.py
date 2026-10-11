@@ -3,7 +3,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 
 from ..core.formatting import repo_short_name
-from ..core.saved_searches import describe_filter, describe_selection
+from ..core.saved_searches import FETCH_FAILURE_MODES, describe_filter, describe_selection
+from .dialogs import FetchFailureDialog
 from ..core.sync import due_searches, run_saved_search
 from .widgets import ScrolledTree, ToolTip, attach_context_menu, show_text_window
 
@@ -22,6 +23,8 @@ def format_search_details(search):
         f"Selección: {describe_selection(search)}",
         f"Destino: {search['dest_dir']}",
         f"Estructura: {search['layout']}",
+        f"Fetch antes de ejecutar: {'Sí' if search['fetch_before'] else 'No'}",
+        f"Si falla fetch: {FETCH_FAILURE_MODES[search.get('fetch_failure', 'stop')]}",
         f"Automática: {'Sí' if search['auto_sync'] else 'No'} (cada {search['interval_minutes']} min)",
         f"Última ejecución: {search['last_run'] or 'Nunca'}",
         f"Resultado: {search['last_result'] or 'Sin ejecutar'}",
@@ -88,6 +91,8 @@ class SavedSearchesPanel:
                  "Activa o pausa la sincronización periódica de la búsqueda seleccionada."),
                 ("Cambiar intervalo", self.change_interval,
                  "Cambia cuántos minutos espera la aplicación entre sincronizaciones automáticas."),
+                ("Si falla fetch", self.change_fetch_failure,
+                 "Detener (predeterminado) o continuar con referencias locales posiblemente obsoletas."),
                 ("Cargar en pantalla", self.load_selected,
                  "Copia sus filtros y destino a «Explorar y descargar» para revisarlos."),
                 ("Eliminar", self.delete_selected,
@@ -186,6 +191,9 @@ class SavedSearchesPanel:
                            ("Errores", "errors")):
             for item in summary.get(key, [])[:20]:
                 self.app.log(f"    {label}: {item}")
+        if self.app.credentials.handle(summary.get("warnings"), manual=manual,
+                                       retry=lambda: self._retry(search, manual)):
+            return
         if manual:
             self.refresh()
             self.table.tree.selection_set(str(search["id"]))
@@ -194,8 +202,15 @@ class SavedSearchesPanel:
     def _failed(self, search, error, manual):
         name = search["name"]
         self.app.log(f"[Sincronización '{name}'] Error: {error}")
+        if self.app.credentials.handle(str(error), retry=lambda: self._retry(search, manual), manual=manual):
+            return
         if manual:
             messagebox.showerror("Sincronización", f"{name}:\n{error}")
+
+    def _retry(self, search, manual):
+        current = self.store.get(search["id"])
+        if current:
+            self.run(current, force=manual, manual=manual)
 
     def _finished(self, search_id):
         self.running.pop(search_id, None)
@@ -231,6 +246,18 @@ class SavedSearchesPanel:
         search = self._selected()
         if search:
             self.on_load(search)
+
+    def change_fetch_failure(self):
+        search = self._selected()
+        if not search:
+            return
+        if search["id"] in self.running:
+            messagebox.showinfo("En ejecución", "Espera a que termine la búsqueda.")
+            return
+        dialog = FetchFailureDialog(self.app.root, search.get("fetch_failure", "stop"))
+        if dialog.result:
+            self.store.update(search["id"], fetch_failure=dialog.result)
+            self.refresh()
 
     def delete_selected(self):
         search = self._selected()

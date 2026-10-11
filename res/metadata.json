@@ -1,14 +1,23 @@
 {
     "name": "Git Branch Info & Recovery (with SQLite History)",
     "description": "Aplicación de escritorio para inspeccionar y recuperar ramas Git y registrar historial en SQLite.",
-    "version": "V26.09.26",
+    "version": "V26.10.029",
     "owner": "Mario Rubio Avila",
     "maintainer": "Mario Rubio",
     "entry_point": "Git_info_Tools.exe",
     "python_requires": ">=3.8",
     "dependencies": ["GitPython", "gitdb", "openpyxl"],
-    "known_issues": [],
-    "fixed_issues": [],
+    "known_issues": [
+        "La sincronización automática de la GUI requiere la aplicación abierta; para ejecución desatendida usar la CLI.",
+        "En ejecución desatendida (Programador de tareas) no se puede pedir la passphrase SSH: usar un agente con la clave cargada o una clave sin passphrase."
+    ],
+    "fixed_issues": [
+        "V26.10.029: el fetch fallaba con 'Permission denied (publickey)' en claves SSH con passphrase porque Git se ejecuta sin consola; ahora se pide la passphrase y se carga en un ssh-agent de sesión."
+    ],
+    "editions": {
+        "full": "main.py",
+        "lite": "main_lite.py (solo automatizaciones)"
+    },
     "notes": "Herramienta de inspección Git con persistencia en SQLite.",
     "url": "https://github.com/mrubiodev/Git_info_Tools"
 }

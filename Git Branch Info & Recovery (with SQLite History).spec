@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = []
+datas = [('S:\\GreenhouseProyect\\Git_info_Tools\\res\\app_icon.ico', 'res')]
 datas += collect_data_files('TKinterModernThemes')
 
 
 a = Analysis(
-    ['main.py'],
+    ['S:\\GreenhouseProyect\\Git_info_Tools\\main.py'],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -39,5 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['res\\app_icon.ico'],
+    icon=['S:\\GreenhouseProyect\\Git_info_Tools\\res\\app_icon.ico'],
 )

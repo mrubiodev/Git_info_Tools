@@ -1,6 +1,8 @@
 """Diálogos modales reutilizables."""
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog, ttk
+
+from ..core.saved_searches import FETCH_FAILURE_MODES
 
 from .widgets import ToolTip
 
@@ -8,10 +10,29 @@ SAVE_ALL = "all"
 SAVE_SELECTION = "selection"
 
 
+class FetchFailureDialog(simpledialog.Dialog):
+    def __init__(self, parent, fetch_failure="stop"):
+        self.initial = fetch_failure
+        super().__init__(parent, "Si falla fetch")
+
+    def body(self, parent):
+        self.policy = tk.StringVar(value=FETCH_FAILURE_MODES[self.initial])
+        combo = ttk.Combobox(parent, textvariable=self.policy,
+                             values=list(FETCH_FAILURE_MODES.values()), state="readonly", width=65)
+        combo.pack(padx=10, pady=10)
+        tk.Label(parent, text="Continuar NO comprueba el estado actual del remoto.\n"
+                             "Puede descargar o incorporar commits de referencias obsoletas.").pack(pady=5)
+        return combo
+
+    def apply(self):
+        self.result = next(key for key, label in FETCH_FAILURE_MODES.items() if label == self.policy.get())
+
+
 class SaveSearchDialog(tk.Toplevel):
     """Pide nombre, alcance (todo el filtro o solo lo marcado) y sincronización automática."""
 
-    def __init__(self, parent, default_name="", total=0, checked=0, auto_sync=False, interval=15):
+    def __init__(self, parent, default_name="", total=0, checked=0, auto_sync=False, interval=15,
+                 fetch_failure="stop"):
         super().__init__(parent)
         self.title("Guardar búsqueda")
         self.transient(parent)
@@ -57,8 +78,12 @@ class SaveSearchDialog(tk.Toplevel):
         self.interval.pack(side=tk.LEFT, padx=5)
         ToolTip(self.interval, "Frecuencia de comprobación automática, entre 1 y 1440 minutos.")
 
+        tk.Label(body, text="Si falla fetch:").grid(row=4, column=0, sticky="w")
+        self.fetch_failure = tk.StringVar(value=FETCH_FAILURE_MODES[fetch_failure])
+        ttk.Combobox(body, textvariable=self.fetch_failure, values=list(FETCH_FAILURE_MODES.values()),
+                     state="readonly", width=60).grid(row=4, column=1, pady=5)
         buttons = tk.Frame(body)
-        buttons.grid(row=4, column=0, columnspan=2, pady=(12, 0))
+        buttons.grid(row=5, column=0, columnspan=2, pady=(12, 0))
         self.save_button = tk.Button(buttons, text="Guardar", width=12, command=self._accept)
         self.save_button.pack(side=tk.LEFT, padx=5)
         self.cancel_button = tk.Button(buttons, text="Cancelar", width=12, command=self.destroy)
@@ -85,7 +110,9 @@ class SaveSearchDialog(tk.Toplevel):
                                    parent=self)
             return
         self.result = {"name": name, "mode": self.mode.get(), "auto_sync": self.auto_var.get(),
-                       "interval_minutes": interval}
+                       "interval_minutes": interval,
+                       "fetch_failure": next(key for key, label in FETCH_FAILURE_MODES.items()
+                                             if label == self.fetch_failure.get())}
         self.destroy()
 
     @classmethod

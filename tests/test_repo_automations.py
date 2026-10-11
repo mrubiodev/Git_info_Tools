@@ -66,6 +66,169 @@ class RepositoryAutomationTests(unittest.TestCase):
     def run_automation(self):
         return run_repository_automation(self.store, self.store.get(self.automation["id"]))
 
+    def test_sync_preserves_staged_unstaged_and_untracked_work(self):
+        self.store.update(self.automation["id"], local_changes="sync")
+        self.write(self.repo, "file.txt", "staged\n")
+        self.git(self.repo, "add", "file.txt")
+        self.write(self.repo, "file.txt", "unstaged\n")
+        self.write(self.repo, "private.txt", "untracked\n")
+        index = self.git(self.repo, "show", ":file.txt")
+        target = self.publish("remote.txt", "new remote file\n")
+        self.assertEqual(self.run_automation()["status"], "updated")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), target)
+        self.assertEqual(self.git(self.repo, "show", ":file.txt"), index)
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "unstaged\n")
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "private.txt")))
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), self.git(self.source, "rev-parse", "HEAD"))
+
+    def test_sync_blocks_overlapping_edits_and_untracked_collisions(self):
+        self.store.update(self.automation["id"], local_changes="sync")
+        self.write(self.repo, "file.txt", "local work\n")
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        self.publish()
+        self.assertEqual(self.run_automation()["status"], "blocked")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "local work\n")
+        self.git(self.repo, "restore", "file.txt")
+        self.write(self.repo, "new.txt", "private\n")
+        self.publish("new.txt", "published\n")
+        self.assertEqual(self.run_automation()["status"], "blocked")
+        with open(os.path.join(self.repo, "new.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "private\n")
+
+    def test_stash_can_keep_work_for_manual_recovery(self):
+        self.store.update(self.automation["id"], local_changes="stash")
+        self.write(self.repo, "file.txt", "local work\n")
+        self.git(self.repo, "add", "file.txt")
+        self.write(self.repo, "private.txt", "untracked\n")
+        target = self.publish()
+        result = self.run_automation()
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), target)
+        self.assertEqual(self.git(self.repo, "status", "--porcelain"), "")
+        self.assertIn(result["stash"], self.git(self.repo, "stash", "list", "--format=%H"))
+        self.assertEqual(self.git(self.repo, "show", f"{result['stash']}:file.txt"), "local work")
+        self.assertEqual(self.git(self.repo, "show", f"{result['stash']}^3:private.txt"), "untracked")
+        self.assertEqual(self.run_automation()["status"], "unchanged")
+        self.assertEqual(len(self.git(self.repo, "stash", "list").splitlines()), 1)
+
+    def test_stash_reapplies_index_and_preserves_older_stashes(self):
+        self.write(self.repo, "old.txt", "older stash\n")
+        self.git(self.repo, "stash", "push", "-u", "-m", "existing")
+        previous = self.git(self.repo, "rev-parse", "refs/stash")
+        self.store.update(self.automation["id"], local_changes="stash", restore_stash=True)
+        self.write(self.repo, "file.txt", "staged\n")
+        self.git(self.repo, "add", "file.txt")
+        self.write(self.repo, "file.txt", "unstaged\n")
+        self.write(self.repo, "private.txt", "untracked\n")
+        target = self.publish("new.txt", "remote\n")
+        result = self.run_automation()
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), target)
+        self.assertEqual(self.git(self.repo, "show", ":file.txt"), "staged")
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "unstaged\n")
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "private.txt")))
+        self.assertEqual(self.git(self.repo, "stash", "list", "--format=%H"), previous)
+
+    def test_stash_restore_conflicts_are_visible_and_keep_backup(self):
+        self.store.update(self.automation["id"], local_changes="stash", restore_stash=True)
+        self.write(self.repo, "file.txt", "local\n")
+        target = self.publish()
+        result = self.run_automation()
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), target)
+        self.assertIn(result["stash"], self.git(self.repo, "stash", "list", "--format=%H"))
+        self.assertEqual(self.store.get("Clone")["last_details"]["status"], "conflict")
+        self.assertEqual(self.run_automation()["status"], "blocked")
+
+    def test_stash_restores_work_if_fast_forward_fails(self):
+        self.store.update(self.automation["id"], local_changes="stash")
+        self.write(self.repo, "file.txt", "local\n")
+        self.write(self.repo, "private.txt", "untracked\n")
+        self.write(self.repo, "ignored.txt", "ignored private\n")
+        self.write(self.source, "ignored.txt", "remote\n")
+        self.git(self.source, "add", "-f", "ignored.txt")
+        self.git(self.source, "commit", "-m", "Track ignored")
+        self.git(self.source, "push", "origin", "main")
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        with self.assertRaises(GitError):
+            self.run_automation()
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "local\n")
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "private.txt")))
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+
+    def test_stash_cancellation_after_saving_restores_local_work(self):
+        self.store.update(self.automation["id"], local_changes="stash")
+        self.write(self.repo, "file.txt", "local\n")
+        self.publish()
+        from git_info.core import repo_automations
+        original = repo_automations.run_git
+        cancelled = False
+
+        def intercepted(repo, *args, **kwargs):
+            nonlocal cancelled
+            result = original(repo, *args, **kwargs)
+            if args[:2] == ("stash", "push"):
+                cancelled = True
+            return result
+
+        with patch.object(repo_automations, "run_git", side_effect=intercepted), self.assertRaises(Cancelled):
+            run_repository_automation(self.store, self.store.get("Clone"), cancel=lambda: cancelled)
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "local\n")
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+
+    def test_failed_stash_push_restores_backup_if_it_was_created(self):
+        self.store.update(self.automation["id"], local_changes="stash")
+        self.write(self.repo, "file.txt", "local\n")
+        self.publish("new.txt", "remote\n")
+        from git_info.core import repo_automations
+        original = repo_automations.run_git
+
+        def intercepted(repo, *args, **kwargs):
+            result = original(repo, *args, **kwargs)
+            if args[:2] == ("stash", "push"):
+                raise GitError("Stash cleanup failed")
+            return result
+
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        with patch.object(repo_automations, "run_git", side_effect=intercepted), self.assertRaises(GitError):
+            self.run_automation()
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "local\n")
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+
+    def test_policy_persistence_and_old_database_migration(self):
+        self.store.update(self.automation["id"], local_changes="stash", restore_stash=True)
+        reopened = RepositoryAutomationStore(self.db)
+        reopened.init()
+        self.assertEqual(reopened.get("Clone")["local_changes"], "stash")
+        self.assertTrue(reopened.get("Clone")["restore_stash"])
+        with self.assertRaises(ValueError):
+            reopened.update(self.automation["id"], local_changes="reset")
+        old = RepositoryAutomationStore(os.path.join(self.temp.name, "old.db"))
+        old._execute("""
+            CREATE TABLE repository_automations (
+                id INTEGER PRIMARY KEY, name TEXT, repo_path TEXT, branch TEXT, remote TEXT,
+                remote_branch TEXT, auto_sync INTEGER, interval_minutes INTEGER, created_at TEXT,
+                last_run TEXT, last_result TEXT, last_details TEXT)
+        """)
+        old._execute("""
+            INSERT INTO repository_automations VALUES
+            (1, 'Old', ?, 'main', 'origin', 'main', 1, 15, '2026-10-04', NULL, NULL, NULL)
+        """, (self.repo,))
+        old.init()
+        self.assertEqual(old.get(1)["local_changes"], "block")
+        self.assertFalse(old.get(1)["restore_stash"])
+        self.assertEqual(old.get(1)["fetch_failure"], "stop")
+
     def test_fast_forward_downloads_changes_and_records_result(self):
         self.git(self.repo, "config", "branch.main.mergeOptions", "--squash --autostash")
         old = self.git(self.repo, "rev-parse", "HEAD")
@@ -163,6 +326,128 @@ class RepositoryAutomationTests(unittest.TestCase):
         record = self.store.get("Clone")
         self.assertIn("Error", record["last_result"])
         self.assertIn("error", record["last_details"])
+        self.assertTrue(record["last_result"].startswith("REMOTO NO ACTUALIZADO"))
+
+    def make_remote_unavailable(self):
+        self.git(self.repo, "remote", "set-url", "origin", os.path.join(self.temp.name, "missing.git"))
+
+    def test_local_fetch_fallback_fast_forwards_only_existing_ref_and_warns(self):
+        target = self.publish()
+        self.git(self.repo, "fetch", "origin")
+        self.store.update(self.automation["id"], fetch_failure="local")
+        self.make_remote_unavailable()
+        result = self.run_automation()
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["after"], target)
+        self.assertFalse(result["remote_updated"])
+        self.assertTrue(result["text"].startswith("REMOTO NO ACTUALIZADO"))
+        self.assertTrue(result["warnings"])
+        self.assertIn("AVISO", format_repository_details(self.store.get("Clone")))
+        unchanged = self.run_automation()
+        self.assertEqual(unchanged["status"], "unchanged")
+        self.assertNotIn("Al día", unchanged["text"])
+        self.assertTrue(unchanged["text"].startswith("REMOTO NO ACTUALIZADO"))
+        with patch("builtins.print"):
+            self.assertEqual(main(["--db", self.db, "--update-repo", "Clone"]), 1)
+
+    def test_local_fetch_fallback_requires_configured_ref(self):
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        self.store.update(self.automation["id"], fetch_failure="local")
+        self.git(self.repo, "update-ref", "-d", "refs/remotes/origin/main")
+        self.make_remote_unavailable()
+        with self.assertRaisesRegex(GitError, "No existe la referencia local configurada"):
+            self.run_automation()
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        self.assertTrue(self.store.get("Clone")["last_details"]["warnings"])
+
+    def test_fallback_keeps_safety_checks_and_warning_on_later_error(self):
+        self.store.update(self.automation["id"], fetch_failure="local", local_changes="sync")
+        target = self.publish()
+        self.git(self.repo, "fetch", "origin")
+        self.write(self.repo, "file.txt", "local work\n")
+        self.make_remote_unavailable()
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        blocked = self.run_automation()
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertTrue(blocked["text"].startswith("REMOTO NO ACTUALIZADO"))
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        self.assertNotEqual(before, target)
+        self.git(self.repo, "restore", "file.txt")
+        from git_info.core import repo_automations
+        original = repo_automations.run_git
+
+        def intercepted(repo, *args, **kwargs):
+            if "merge" in args:
+                raise GitError("merge failed")
+            return original(repo, *args, **kwargs)
+
+        with patch.object(repo_automations, "run_git", side_effect=intercepted):
+            with self.assertRaisesRegex(GitError, "merge failed"):
+                self.run_automation()
+        record = self.store.get("Clone")
+        self.assertTrue(record["last_result"].startswith("REMOTO NO ACTUALIZADO"))
+        self.assertTrue(record["last_details"]["warnings"])
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+
+    def test_fetch_policy_save_update_validation_and_cli_override(self):
+        for value in ("ignore", None, [], True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.store.save(dict(self.automation, fetch_failure=value), self.automation["id"])
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.store.update(self.automation["id"], fetch_failure=value)
+        saved = self.store.save(dict(self.automation, fetch_failure="local"), self.automation["id"])
+        self.assertEqual(saved["fetch_failure"], "local")
+        self.publish()
+        self.git(self.repo, "fetch", "origin")
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        self.make_remote_unavailable()
+        with patch("builtins.print"):
+            self.assertEqual(main(["--db", self.db, "--update-repo", "Clone",
+                                   "--fetch-failure", "stop"]), 1)
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        self.assertEqual(self.store.get("Clone")["fetch_failure"], "local")
+
+    def test_fallback_uses_pre_fetch_ref_even_after_partial_fetch_timeout(self):
+        cached = self.publish()
+        self.git(self.repo, "fetch", "origin")
+        newer = self.publish("next.txt", "not cached before fetch\n")
+        self.store.update(self.automation["id"], fetch_failure="local")
+        from git_info.core import repo_automations
+        original = repo_automations.run_git
+
+        def intercepted(repo, *args, **kwargs):
+            result = original(repo, *args, **kwargs)
+            if args[0] == "fetch":
+                raise subprocess.TimeoutExpired("git fetch", 600)
+            return result
+
+        with patch.object(repo_automations, "run_git", side_effect=intercepted):
+            result = self.run_automation()
+        self.assertEqual(result["after"], cached)
+        self.assertEqual(self.git(self.repo, "rev-parse", "origin/main"), newer)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "next.txt")))
+        self.assertTrue(result["warnings"])
+
+    def test_fallback_preserves_stash_mode_and_divergence_blocking(self):
+        self.store.update(self.automation["id"], fetch_failure="local",
+                          local_changes="stash", restore_stash=True)
+        self.write(self.repo, "file.txt", "local work\n")
+        cached = self.publish("new.txt", "remote\n")
+        self.git(self.repo, "fetch", "origin")
+        self.make_remote_unavailable()
+        result = self.run_automation()
+        self.assertEqual(result["after"], cached)
+        self.assertTrue(result["warnings"])
+        with open(os.path.join(self.repo, "file.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), "local work\n")
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+        self.git(self.repo, "add", "file.txt")
+        self.git(self.repo, "commit", "-m", "Local")
+        local_head = self.git(self.repo, "rev-parse", "HEAD")
+        result = self.run_automation()
+        self.assertEqual(result["status"], "blocked")
+        self.assertTrue(result["warnings"])
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), local_head)
 
     def test_remote_branch_removed_is_reported(self):
         self.git(self.source, "push", "origin", "--delete", "main")

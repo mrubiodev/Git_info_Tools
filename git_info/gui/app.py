@@ -1,4 +1,6 @@
 """Ventana principal: compone las pestañas y el flujo de análisis de ramas."""
+import sys
+from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -16,6 +18,7 @@ try:
     from .background import BackgroundRunner
     from .batch_tab import BatchTab
     from .console_tab import ConsoleTab, FetchProgress
+    from .credentials import CredentialPrompter
     from .latest_tab import LatestFilesTab
     from .search_tab import SearchTab
     from .widgets import browse_into, ToolTip
@@ -37,6 +40,7 @@ except Exception:
     from git_info.gui.background import BackgroundRunner
     from git_info.gui.batch_tab import BatchTab
     from git_info.gui.console_tab import ConsoleTab, FetchProgress
+    from git_info.gui.credentials import CredentialPrompter
     from git_info.gui.latest_tab import LatestFilesTab
     from git_info.gui.search_tab import SearchTab
     from git_info.gui.widgets import browse_into, ToolTip
@@ -53,6 +57,7 @@ class GitBranchInfoApp:
         self.saved_store = SavedSearchStore(db_path)
         self.automation_store = RepositoryAutomationStore(db_path)
         self.runner = BackgroundRunner(root)
+        self.credentials = CredentialPrompter(self)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=1)
@@ -62,6 +67,12 @@ class GitBranchInfoApp:
         self.notebook = ttk.Notebook(root)
         self.notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         self.console = ConsoleTab(self.notebook)
+        if sys.platform == "win32":
+            icon = Path(__file__).resolve().parents[2] / "res" / "app_icon.ico"
+            try:
+                self.root.iconbitmap(default=str(icon))
+            except tk.TclError as error:
+                self.log(f"No se pudo cargar el icono de la aplicación: {error}")
         self._init_database()
         self.search_tab = SearchTab(self, self.notebook, self.branch_store)
         self.batch_tab = BatchTab(self, self.notebook, self.branch_store)
@@ -173,10 +184,16 @@ class GitBranchInfoApp:
             messagebox.showwarning("Advertencia", "Por favor, selecciona la ruta del repositorio Git.")
             return
         self.display_message("Obteniendo información de ramas y registrando en la base de datos...", append=False)
+        messages = []
+
+        def log(message):
+            messages.append(str(message))
+            self.log(message)
+
         try:
             repo = branch_scanner.open_repo(repo_path)
             remote = branch_scanner.scan_remote_branches(
-                repo, repo_path, self.branch_store, self.log, FetchProgress(self.console.text_output))
+                repo, repo_path, self.branch_store, log, FetchProgress(self.console.text_output))
             self._show_report(remote, "Ramas Remotas Existentes")
 
             self.log("\n\n--- Buscando Ramas Potencialmente Recuperables en el Reflog Local ---")
@@ -185,6 +202,7 @@ class GitBranchInfoApp:
             self._show_report(recoverable, "Ramas Potencialmente Recuperables (Reflog)", recoverable=True)
 
             self.log("\nProceso completado. La información ha sido registrada en la base de datos.")
+            self.credentials.handle(messages, retry=self.get_all_branch_info, manual=True)
         except InvalidGitRepositoryError:
             messagebox.showerror("Error", "La carpeta seleccionada no es un repositorio Git válido.")
             self.display_message("Error: La carpeta seleccionada no es un repositorio Git válido.", append=False)
@@ -197,6 +215,12 @@ class GitBranchInfoApp:
 
 
 def run_gui(db_path=DEFAULT_DB_PATH):
+    if sys.platform == "win32":
+        import ctypes
+        result = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "mrubiodev.GitBranchInfoRecovery")
+        if result < 0:
+            raise OSError(f"No se pudo establecer la identidad de la aplicación: {result}")
     root = tk.Tk()
     GitBranchInfoApp(root, db_path)
     root.mainloop()

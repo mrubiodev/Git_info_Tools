@@ -54,8 +54,8 @@ if exist "%SCRIPT_DIR%requirements.txt" (
     %VENV_PIP% install gitpython openpyxl
 )
 
-REM Configurable entrypoint
-set "ENTRYPOINT=main.py"
+REM Configurable entrypoint (empaquetar_lite.bat lo predefine)
+if not defined ENTRYPOINT set "ENTRYPOINT=main.py"
 
 REM Extract metadata from res\metadata.json using PowerShell
 echo Extrayendo metadata del proyecto...
@@ -71,6 +71,7 @@ REM Fallback values if extraction fails
 if "%PROJECT%"=="" set PROJECT=GitBranchInfo
 if "%AUTHOR%"=="" set AUTHOR=Mrubiodev
 if "%VERSION%"=="" set VERSION=%__version__%
+if defined PROJECT_SUFFIX set "PROJECT=%PROJECT%%PROJECT_SUFFIX%"
 
 echo Metadata extraida: %PROJECT% v%VERSION% por %AUTHOR%
 
@@ -91,7 +92,11 @@ if "%CONSOLE%"=="0" (
 
 echo Empaquetando EXE como %PROJECT%.exe (version %VERSION%) usando entrada %ENTRYPOINT% (console=%CONSOLE%)
 
-%VENV_PY% -m PyInstaller -n "%PROJECT%" -i "%SCRIPT_DIR%res\app_icon.ico" --collect-data TKinterModernThemes --hidden-import git --hidden-import openpyxl %CONSOLE_FLAG% --onefile "%SCRIPT_DIR%%ENTRYPOINT%"
+pushd "%SCRIPT_DIR%"
+"%VENV_PY%" -m PyInstaller -n "%PROJECT%" -i "%SCRIPT_DIR%res\app_icon.ico" --add-data "%SCRIPT_DIR%res\app_icon.ico;res" --collect-data TKinterModernThemes --hidden-import git --hidden-import openpyxl %CONSOLE_FLAG% --onefile "%SCRIPT_DIR%%ENTRYPOINT%"
+set "BUILD_EXIT=!ERRORLEVEL!"
+popd
+if not "!BUILD_EXIT!"=="0" exit /b !BUILD_EXIT!
 
 if exist "%SCRIPT_DIR%dist\" (
     if exist "%SCRIPT_DIR%resources_release\" (

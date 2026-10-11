@@ -9,10 +9,21 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 COLUMNS = ("id", "name", "repo_path", "scope", "path_regex", "branch_regex", "ignore_case",
            "selected_paths", "dest_dir", "layout", "overwrite_local", "fetch_before",
            "auto_sync", "interval_minutes", "created_at", "last_run", "last_result",
-           "refs_signature", "last_details")
+           "refs_signature", "last_details", "fetch_failure")
 _BOOL_COLUMNS = ("ignore_case", "overwrite_local", "fetch_before", "auto_sync")
 _UPDATABLE = {"auto_sync", "interval_minutes", "last_run", "last_result", "refs_signature",
-              "last_details"}
+              "last_details", "fetch_failure"}
+
+FETCH_FAILURE_MODES = {
+    "stop": "Detener si falla fetch (predeterminado)",
+    "local": "Continuar con referencias locales posiblemente obsoletas",
+}
+
+
+def validate_fetch_failure(value):
+    if not isinstance(value, str) or value not in FETCH_FAILURE_MODES:
+        raise ValueError("La política ante fallos de fetch debe ser 'stop' o 'local'.")
+    return value
 
 
 def now_text():
@@ -20,8 +31,9 @@ def now_text():
 
 
 class SavedSearchStore:
-    def __init__(self, db_path):
+    def __init__(self, db_path, connection=None):
         self.db_path = db_path
+        self._connection = connection
 
     def _connect(self):
         # Ensure parent directory exists (the DB path may be inside a
@@ -34,6 +46,8 @@ class SavedSearchStore:
         return sqlite3.connect(db_path, timeout=30)
 
     def _execute(self, query, params=()):
+        if self._connection is not None:
+            return self._connection.execute(query, params).fetchall()
         conn = self._connect()
         try:
             rows = conn.execute(query, params).fetchall()
@@ -69,6 +83,9 @@ class SavedSearchStore:
         columns = {row[1] for row in self._execute("PRAGMA table_info(saved_searches)")}
         if "last_details" not in columns:
             self._execute("ALTER TABLE saved_searches ADD COLUMN last_details TEXT")
+        if "fetch_failure" not in columns:
+            self._execute("ALTER TABLE saved_searches "
+                          "ADD COLUMN fetch_failure TEXT NOT NULL DEFAULT 'stop'")
 
     @staticmethod
     def _to_dict(row):
@@ -93,11 +110,12 @@ class SavedSearchStore:
     def save(self, search):
         """Crea o reemplaza (por nombre) una búsqueda guardada."""
         selected = search.get("selected_paths")
+        fetch_failure = validate_fetch_failure(search.get("fetch_failure", "stop"))
         self._execute("""
             INSERT INTO saved_searches (name, repo_path, scope, path_regex, branch_regex, ignore_case,
                 selected_paths, dest_dir, layout, overwrite_local, fetch_before, auto_sync,
-                interval_minutes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                interval_minutes, created_at, fetch_failure)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 repo_path = excluded.repo_path, scope = excluded.scope,
                 path_regex = excluded.path_regex, branch_regex = excluded.branch_regex,
@@ -105,6 +123,7 @@ class SavedSearchStore:
                 dest_dir = excluded.dest_dir, layout = excluded.layout,
                 overwrite_local = excluded.overwrite_local, fetch_before = excluded.fetch_before,
                 auto_sync = excluded.auto_sync, interval_minutes = excluded.interval_minutes,
+                fetch_failure = excluded.fetch_failure,
                 refs_signature = NULL, last_run = NULL, last_result = NULL, last_details = NULL
         """, (
             search["name"], search["repo_path"], search["scope"], search.get("path_regex", ""),
@@ -112,11 +131,13 @@ class SavedSearchStore:
             json.dumps(selected, ensure_ascii=False) if selected is not None else None,
             search["dest_dir"], search["layout"], int(search.get("overwrite_local", False)),
             int(search.get("fetch_before", True)), int(search.get("auto_sync", False)),
-            int(search.get("interval_minutes", 15)), now_text(),
+            int(search.get("interval_minutes", 15)), now_text(), fetch_failure,
         ))
         return self.get(search["name"])
 
     def update(self, search_id, **fields):
+        if "fetch_failure" in fields:
+            validate_fetch_failure(fields["fetch_failure"])
         fields = {k: (int(v) if isinstance(v, bool) else v) for k, v in fields.items() if k in _UPDATABLE}
         if "last_details" in fields and fields["last_details"] is not None:
             fields["last_details"] = json.dumps(fields["last_details"], ensure_ascii=False)

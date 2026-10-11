@@ -3,7 +3,7 @@ import subprocess
 
 from . import exporter, latest_scan
 from .gitcmd import GitError, fetch_all
-from .saved_searches import is_due, now_text
+from .saved_searches import is_due, now_text, validate_fetch_failure
 
 
 def _result(text, **extra):
@@ -14,7 +14,7 @@ def _result(text, **extra):
 
 
 def _with_warnings(text, warnings):
-    return text + (" (" + "; ".join(warnings) + ")" if warnings else "")
+    return ("REMOTO NO ACTUALIZADO — " + "; ".join(warnings) + "\n" if warnings else "") + text
 
 
 def run_saved_search(store, search, force=False, progress=None, cancel=None, parallel=False, max_workers=4):
@@ -23,24 +23,31 @@ def run_saved_search(store, search, force=False, progress=None, cancel=None, par
     Sin `force`, si las ramas no han cambiado desde la última ejecución
     correcta no se vuelve a escanear ni a descargar nada.
     """
+    warnings = []
     try:
-        return _run(store, search, force, progress, cancel, parallel, max_workers)
+        return _run(store, search, force, progress, cancel, parallel, max_workers, warnings)
     except Exception as e:
-        store.update(search["id"], last_run=now_text(), last_result=f"Error: {e}",
-                     last_details={"error": str(e)})
+        store.update(search["id"], last_run=now_text(), last_result=_with_warnings(f"Error: {e}", warnings),
+                     last_details={"error": str(e), "warnings": warnings})
         raise
 
 
-def _run(store, search, force, progress, cancel, parallel=False, max_workers=4):
+def _run(store, search, force, progress, cancel, parallel=False, max_workers=4, warnings=None):
     repo = search["repo_path"]
-    warnings = []
+    warnings = warnings if warnings is not None else []
+    fetch_failure = validate_fetch_failure(search.get("fetch_failure", "stop"))
     if search["fetch_before"]:
         if progress:
             progress(f"[{search['name']}] git fetch --all --prune")
         try:
             fetch_all(repo)
         except (GitError, subprocess.TimeoutExpired) as e:
-            warnings.append(f"fetch falló, se usan las referencias locales: {e}")
+            warning = f"fetch falló; referencias locales posiblemente obsoletas: {e}"
+            warnings.append(warning)
+            if progress:
+                progress(f"REMOTO NO ACTUALIZADO — {warning}")
+            if fetch_failure == "stop":
+                raise GitError(f"REMOTO NO ACTUALIZADO: {e}. Ejecución detenida.") from e
 
     # Prefer cached branch list when we are not explicitly fetching first.
     # If fetch_before is True we just did a fetch and should not use the cache.

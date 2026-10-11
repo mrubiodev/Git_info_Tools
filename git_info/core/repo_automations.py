@@ -3,13 +3,21 @@ import contextlib
 import json
 import os
 import sqlite3
+import subprocess
+import uuid
 
 from .gitcmd import GitError, check_cancel, run_git
-from .saved_searches import SavedSearchStore, is_due, now_text
+from .saved_searches import SavedSearchStore, is_due, now_text, validate_fetch_failure
 
 COLUMNS = ("id", "name", "repo_path", "branch", "remote", "remote_branch",
            "auto_sync", "interval_minutes", "created_at", "last_run",
-           "last_result", "last_details")
+           "last_result", "last_details", "local_changes", "restore_stash", "fetch_failure")
+
+LOCAL_CHANGE_MODES = {
+    "block": "Bloquear si hay cambios locales",
+    "sync": "Sincronizar conservando cambios locales",
+    "stash": "Guardar cambios locales en stash y actualizar",
+}
 
 
 def normalized_path(path):
@@ -71,11 +79,22 @@ class RepositoryAutomationStore(SavedSearchStore):
                 last_details TEXT
             )
         """)
+        columns = {row[1] for row in self._execute("PRAGMA table_info(repository_automations)")}
+        if "local_changes" not in columns:
+            self._execute("ALTER TABLE repository_automations "
+                          "ADD COLUMN local_changes TEXT NOT NULL DEFAULT 'block'")
+        if "restore_stash" not in columns:
+            self._execute("ALTER TABLE repository_automations "
+                          "ADD COLUMN restore_stash INTEGER NOT NULL DEFAULT 0")
+        if "fetch_failure" not in columns:
+            self._execute("ALTER TABLE repository_automations "
+                          "ADD COLUMN fetch_failure TEXT NOT NULL DEFAULT 'stop'")
 
     @staticmethod
     def _to_dict(row):
         data = dict(zip(COLUMNS, row))
         data["auto_sync"] = bool(data["auto_sync"])
+        data["restore_stash"] = bool(data["restore_stash"])
         data["last_details"] = json.loads(data["last_details"]) if data["last_details"] else None
         return data
 
@@ -98,6 +117,10 @@ class RepositoryAutomationStore(SavedSearchStore):
         interval = int(automation.get("interval_minutes", 15))
         if not 1 <= interval <= 1440:
             raise ValueError("El intervalo debe estar entre 1 y 1440 minutos.")
+        mode = automation.get("local_changes", "block")
+        fetch_failure = validate_fetch_failure(automation.get("fetch_failure", "stop"))
+        if mode not in LOCAL_CHANGE_MODES:
+            raise ValueError("La política de cambios locales no es válida.")
         info = inspect_repository(automation["repo_path"])
         branch = automation["branch"].strip()
         remote = automation["remote"].strip()
@@ -110,18 +133,21 @@ class RepositoryAutomationStore(SavedSearchStore):
             raise ValueError("La rama remota no puede comenzar por un guion.")
         git_text(info["repo_path"], "check-ref-format", f"refs/heads/{remote_branch}")
         values = (name, info["repo_path"], branch, remote, remote_branch,
-                  int(automation.get("auto_sync", True)), interval)
+                  int(automation.get("auto_sync", True)), interval, mode,
+                  int(automation.get("restore_stash", False)), fetch_failure)
         try:
             if automation_id is None:
                 self._execute("""
                     INSERT INTO repository_automations
-                    (name, repo_path, branch, remote, remote_branch, auto_sync, interval_minutes, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, repo_path, branch, remote, remote_branch, auto_sync, interval_minutes,
+                     local_changes, restore_stash, fetch_failure, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (*values, now_text()))
             else:
                 self._execute("""
                     UPDATE repository_automations SET name=?, repo_path=?, branch=?, remote=?,
-                        remote_branch=?, auto_sync=?, interval_minutes=?,
+                        remote_branch=?, auto_sync=?, interval_minutes=?, local_changes=?, restore_stash=?,
+                        fetch_failure=?,
                         last_run=NULL, last_result=NULL, last_details=NULL WHERE id=?
                 """, (*values, automation_id))
         except sqlite3.IntegrityError as error:
@@ -129,11 +155,16 @@ class RepositoryAutomationStore(SavedSearchStore):
         return self.get(automation_id) if automation_id is not None else self.get(name)
 
     def update(self, automation_id, **fields):
-        allowed = {"auto_sync", "interval_minutes", "last_run", "last_result", "last_details"}
+        allowed = {"auto_sync", "interval_minutes", "last_run", "last_result", "last_details",
+                   "local_changes", "restore_stash", "fetch_failure"}
         if set(fields) - allowed:
             raise ValueError("Campo de automatización no actualizable.")
+        if "fetch_failure" in fields:
+            validate_fetch_failure(fields["fetch_failure"])
         if "interval_minutes" in fields and not 1 <= int(fields["interval_minutes"]) <= 1440:
             raise ValueError("El intervalo debe estar entre 1 y 1440 minutos.")
+        if "local_changes" in fields and fields["local_changes"] not in LOCAL_CHANGE_MODES:
+            raise ValueError("La política de cambios locales no es válida.")
         if "last_details" in fields and fields["last_details"] is not None:
             fields["last_details"] = json.dumps(fields["last_details"], ensure_ascii=False)
         fields = {key: int(value) if isinstance(value, bool) else value for key, value in fields.items()}
@@ -176,7 +207,12 @@ def repository_lock(repo):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _blocked_reason(repo, branch):
+def _working_status(repo):
+    return run_git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                   "--ignore-submodules=none", timeout=30)
+
+
+def _blocked_reason(repo, branch, allow_local=False):
     for state in ("MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD",
                   "REVERT_HEAD", "BISECT_LOG", "sequencer"):
         path = git_text(repo, "rev-parse", "--git-path", state)
@@ -185,23 +221,33 @@ def _blocked_reason(repo, branch):
     current = git_text(repo, "branch", "--show-current")
     if current != branch:
         return f"La rama activa es '{current or 'HEAD separado'}'; se esperaba '{branch}'. No se cambia de rama."
-    status = run_git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-                     "--ignore-submodules=none", timeout=30)
-    if status:
+    if run_git(repo, "diff", "--name-only", "--diff-filter=U", "-z", timeout=30):
+        return "Hay conflictos locales sin resolver."
+    if not allow_local and _working_status(repo):
         return "Hay cambios locales o ficheros sin seguimiento. No se modifica la carpeta de trabajo."
     return None
 
 
-def _run_update(automation, progress, cancel):
+def _run_update(automation, progress, cancel, warnings):
     repo, branch = automation["repo_path"], automation["branch"]
+    mode = automation.get("local_changes", "block")
+    fetch_failure = validate_fetch_failure(automation.get("fetch_failure", "stop"))
+    if mode not in LOCAL_CHANGE_MODES:
+        raise ValueError("La política de cambios locales no es válida.")
     info = inspect_repository(repo)
     if normalized_path(repo) != info["repo_path"]:
         raise ValueError("La ruta registrada ya no es la raíz del repositorio.")
     with repository_lock(repo):
         check_cancel(cancel)
-        reason = _blocked_reason(repo, branch)
+        reason = _blocked_reason(repo, branch, allow_local=mode != "block")
         if reason:
             return {"status": "blocked", "text": f"Bloqueada: {reason}"}
+        previous = automation.get("last_details") or {}
+        if previous.get("status") == "conflict" and _working_status(repo):
+            return dict(previous, status="conflict",
+                        text="Bloqueada: revisa el error de reaplicación anterior y recupera tus cambios. "
+                             "Para reanudar con cambios locales, vuelve a guardar la configuración. "
+                             f"Stash conservado: {previous.get('stash', 'desconocido')}.")
         remote, remote_branch = automation["remote"], automation["remote_branch"]
         if remote not in info["remotes"] or remote.startswith("-"):
             raise ValueError("El remoto configurado ya no existe o no es válido.")
@@ -209,10 +255,29 @@ def _run_update(automation, progress, cancel):
         ref = f"refs/remotes/{remote}/{remote_branch}"
         if progress:
             progress(f"[{automation['name']}] Descargando {remote}/{remote_branch}...")
-        run_git(repo, "fetch", "--no-tags", "--no-recurse-submodules", "--", remote,
-                f"+refs/heads/{remote_branch}:{ref}", timeout=600)
+        # Resolve the existing configured ref before fetch: partial failures must
+        # not supply a new target or silently substitute another remote.
+        local_target = None
+        if fetch_failure == "local":
+            try:
+                local_target = git_text(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+            except GitError:
+                pass
+        try:
+            run_git(repo, "fetch", "--no-tags", "--no-recurse-submodules", "--", remote,
+                    f"+refs/heads/{remote_branch}:{ref}", timeout=600)
+        except (GitError, subprocess.TimeoutExpired) as error:
+            warning = f"REMOTO NO ACTUALIZADO: fetch falló; referencias posiblemente obsoletas. {error}"
+            warnings.append(warning)
+            if progress:
+                progress(warning)
+            if fetch_failure == "stop":
+                raise GitError(f"{warning} Ejecución detenida.") from error
+            if local_target is None:
+                raise GitError(f"{warning} No existe la referencia local configurada {ref}; "
+                               "no se puede continuar.") from error
         check_cancel(cancel)
-        target = git_text(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        target = local_target if warnings else git_text(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
         before = git_text(repo, "rev-parse", "--verify", "HEAD")
         ahead, behind = map(int, git_text(repo, "rev-list", "--left-right", "--count",
                                          f"{before}...{target}").split())
@@ -224,28 +289,106 @@ def _run_update(automation, progress, cancel):
         if not behind:
             return dict(details, status="unchanged", after=before, text="Al día; sin cambios.")
         # Fetch puede tardar: revisar de nuevo antes de tocar el working tree.
-        reason = _blocked_reason(repo, branch)
+        reason = _blocked_reason(repo, branch, allow_local=mode != "block")
         if reason or git_text(repo, "rev-parse", "HEAD") != before:
             return dict(details, status="blocked",
                         text=f"Bloqueada: {reason or 'HEAD cambió durante la descarga.'}")
         check_cancel(cancel)
-        run_git(repo, "-c", "merge.autostash=false", "-c", "submodule.recurse=false",
-                "merge", "--ff-only", "--no-autostash", "--no-squash", "--no-edit",
-                "--no-overwrite-ignore", target, timeout=120)
+        stash = None
+        if mode == "stash" and _working_status(repo):
+            # Stash no guarda el trabajo dentro de los submódulos.
+            status_without_submodules = run_git(
+                repo, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                "--ignore-submodules=all", timeout=30)
+            if status_without_submodules != _working_status(repo):
+                return dict(details, status="blocked",
+                            text="Bloqueada: hay cambios en submódulos; stash no los protege.")
+            label = f"git-info-automation-{uuid.uuid4().hex}"
+            try:
+                run_git(repo, "stash", "push", "--include-untracked", "--message", label, timeout=120)
+            except (GitError, subprocess.TimeoutExpired) as error:
+                # Git puede guardar el respaldo antes de fallar al limpiar el árbol.
+                for line in git_text(repo, "stash", "list", "--format=%H%x09%gs").splitlines():
+                    sha, message = line.split("\t", 1)
+                    if message.endswith(label):
+                        try:
+                            _restore_stash(repo, sha)
+                        except (GitError, subprocess.TimeoutExpired) as restore_error:
+                            raise GitError(f"{error}\nError restaurando el trabajo local: {restore_error}\n"
+                                           f"Copia conservada en stash {sha}.") from error
+                        break
+                raise
+            stash = git_text(repo, "rev-parse", "--verify", "refs/stash")
+            details["stash"] = stash
+            details["stash_label"] = label
+        try:
+            reason = _blocked_reason(repo, branch, allow_local=mode == "sync")
+            if reason or git_text(repo, "rev-parse", "HEAD") != before:
+                raise GitError(reason or "HEAD cambió antes de actualizar.")
+            check_cancel(cancel)
+            run_git(repo, "-c", "merge.autostash=false", "-c", "submodule.recurse=false",
+                    "-c", f"branch.{branch}.mergeOptions=", "-c", f"core.hooksPath={os.devnull}",
+                    "merge", "--ff-only", "--no-autostash", "--no-squash", "--no-edit",
+                    "--no-overwrite-ignore", target, timeout=120)
+        except Exception as error:
+            if stash:
+                try:
+                    _restore_stash(repo, stash)
+                except (GitError, subprocess.TimeoutExpired) as restore_error:
+                    raise GitError(f"{error}\nNo se pudo restaurar el trabajo local: {restore_error}\n"
+                                   f"Copia conservada en stash {stash}.") from error
+            if isinstance(error, GitError) and mode == "sync" and _working_status(repo):
+                return dict(details, status="blocked", error=str(error),
+                            text=f"Bloqueada: Git no puede actualizar sin sobrescribir trabajo local. {error}")
+            raise
         after = git_text(repo, "rev-parse", "HEAD")
         if after != target:
-            raise GitError("La actualización no terminó en el commit remoto esperado.")
-        return dict(details, status="updated", after=after,
-                    text=f"Actualizada: {behind} commit(s) incorporados por fast-forward.")
+            backup = f" Copia local conservada en stash {stash}." if stash else ""
+            raise GitError(f"La actualización no terminó en el commit remoto esperado.{backup}")
+        text = f"Actualizada: {behind} commit(s) incorporados por fast-forward."
+        if stash:
+            if automation.get("restore_stash", False):
+                try:
+                    _restore_stash(repo, stash)
+                except (GitError, subprocess.TimeoutExpired) as error:
+                    return dict(details, status="conflict", after=after, error=str(error),
+                                text=f"Actualizada, pero la reaplicación tiene conflictos o errores. "
+                                     f"Revisa la carpeta de trabajo; copia conservada en stash {stash}. {error}")
+                text += " Cambios locales reaplicados."
+            else:
+                text += f" Cambios locales guardados en stash {stash}; recuperación manual."
+        return dict(details, status="updated", after=after, text=text)
+
+
+def _restore_stash(repo, stash):
+    # Aplicar por SHA y borrar solo nuestra entrada tras una restauración correcta.
+    run_git(repo, "stash", "apply", "--index", stash, timeout=120)
+    for line in git_text(repo, "stash", "list", "--format=%gd %H").splitlines():
+        ref, sha = line.split()
+        if sha == stash:
+            run_git(repo, "stash", "drop", ref, timeout=30)
+            return
+    raise GitError(f"Los cambios se reaplicaron, pero no se encontró la entrada stash {stash}.")
 
 
 def run_repository_automation(store, automation, progress=None, cancel=None):
+    warnings = []
     try:
-        result = _run_update(automation, progress, cancel)
+        result = _run_update(automation, progress, cancel, warnings)
     except Exception as error:
-        store.update(automation["id"], last_run=now_text(), last_result=f"Error: {error}",
-                     last_details={"status": "error", "error": str(error)})
+        text = ("REMOTO NO ACTUALIZADO — " if warnings else "") + f"Error: {error}"
+        store.update(automation["id"], last_run=now_text(), last_result=text,
+                     last_details={"status": "error", "error": str(error), "warnings": warnings,
+                                   "remote_updated": False} if warnings else
+                                  {"status": "error", "error": str(error)})
         raise
+    result["warnings"] = warnings
+    if warnings:
+        result["remote_updated"] = False
+        result["text"] = "REMOTO NO ACTUALIZADO — referencias locales posiblemente obsoletas. " + result["text"]
+        if result["status"] == "unchanged":
+            result["text"] = "REMOTO NO ACTUALIZADO — sin cambios respecto a la referencia local; " \
+                             "no se ha comprobado si el remoto está al día."
     store.update(automation["id"], last_run=now_text(), last_result=result["text"], last_details=result)
     return result
 

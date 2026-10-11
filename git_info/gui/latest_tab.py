@@ -56,6 +56,7 @@ class LatestFilesTab:
         self.status_signature = None
         self.status_refresh_id = None
         self.scan_params = None    # parámetros del último escaneo correcto
+        self.saved_fetch_failure = "stop"
         self.task = None
 
         self.frame = tk.Frame(notebook)
@@ -341,6 +342,8 @@ class LatestFilesTab:
         self._set_status(text)
         self.app.log(text)
         self.app.select_tab(self.frame)
+        if warning:
+            self.app.credentials.handle(warning, retry=lambda: self.scan(mark), manual=True)
 
     def _populate(self):
         self.table.clear()
@@ -647,7 +650,8 @@ class LatestFilesTab:
         dest = self._validated_destination()
         if not dest:
             return
-        answer = SaveSearchDialog.ask(self.app.root, total=len(self.results), checked=len(self.checked))
+        answer = SaveSearchDialog.ask(self.app.root, total=len(self.results), checked=len(self.checked),
+                                      fetch_failure=self.saved_fetch_failure)
         if not answer:
             return
         if self.saved_store.get(answer["name"]) and not messagebox.askyesno(
@@ -661,11 +665,13 @@ class LatestFilesTab:
             "selected_paths": sorted(self.checked) if answer["mode"] == SAVE_SELECTION else None,
             "dest_dir": dest, "layout": self.layout_var.get(), "overwrite_local": self.overwrite_var.get(),
             "auto_sync": answer["auto_sync"], "interval_minutes": answer["interval_minutes"],
+            "fetch_failure": answer["fetch_failure"],
         })
         self.app.log(f"Búsqueda guardada: '{search['name']}' ({'auto cada ' + str(search['interval_minutes']) + ' min' if search['auto_sync'] else 'manual'}).")
         self.saved_panel.refresh()
 
     def load_saved(self, search):
+        self.saved_fetch_failure = search.get("fetch_failure", "stop")
         self.app.set_repo_path(search["repo_path"])
         self.scope_var.set(SCOPE_BY_VALUE.get(search["scope"], "Todas"))
         for entry, value in ((self.entry_path_regex, search["path_regex"]),

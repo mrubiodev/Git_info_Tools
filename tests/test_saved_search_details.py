@@ -3,6 +3,10 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from git_info.core.gitcmd import GitError
+from git_info.cli import _sync
 
 from git_info.core.saved_searches import SavedSearchStore
 from git_info.core.sync import run_saved_search
@@ -89,6 +93,64 @@ class SavedSearchDetailsTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertIn("last_details", columns)
+        self.assertIn("fetch_failure", columns)
+
+    def test_fetch_failure_defaults_to_stop_without_scan_or_export(self):
+        search = dict(self.search, fetch_before=True)
+        self.assertEqual(search["fetch_failure"], "stop")
+        with patch("git_info.core.sync.fetch_all", side_effect=GitError("offline")), \
+                patch("git_info.core.sync.latest_scan.list_branches") as scan, \
+                patch("git_info.core.sync.exporter.export_entries") as export:
+            with self.assertRaisesRegex(GitError, "REMOTO NO ACTUALIZADO"):
+                run_saved_search(self.store, search)
+        scan.assert_not_called()
+        export.assert_not_called()
+        record = self.store.get(search["id"])
+        self.assertTrue(record["last_result"].startswith("REMOTO NO ACTUALIZADO"))
+        self.assertIn("offline", record["last_details"]["warnings"][0])
+
+    def test_local_fallback_warns_on_download_no_change_and_later_failure(self):
+        self.store.update(self.search["id"], fetch_failure="local")
+        search = dict(self.store.get(self.search["id"]), fetch_before=True)
+        with patch("git_info.core.sync.fetch_all", side_effect=GitError("offline")):
+            result = run_saved_search(self.store, search, force=True)
+            self.assertEqual(len(result["written"]), 1)
+            self.assertTrue(result["text"].startswith("REMOTO NO ACTUALIZADO"))
+            record = dict(self.store.get(search["id"]), fetch_before=True)
+            unchanged = run_saved_search(self.store, record)
+            self.assertFalse(unchanged["changed"])
+            self.assertTrue(unchanged["text"].startswith("REMOTO NO ACTUALIZADO"))
+            with patch("git_info.core.sync.latest_scan.list_branches", side_effect=GitError("scan failed")):
+                with self.assertRaises(GitError):
+                    run_saved_search(self.store, record)
+            failed = self.store.get(search["id"])
+            self.assertIn("offline", format_search_details(failed))
+            self.assertTrue(failed["last_result"].startswith("REMOTO NO ACTUALIZADO"))
+
+    def test_fetch_policy_validation_persistence_and_cli_warning_code(self):
+        for value in ("ignore", None, [], True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.store.save(dict(self.search, fetch_failure=value))
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.store.update(self.search["id"], fetch_failure=value)
+        self.store.update(self.search["id"], fetch_failure="local")
+        reopened = SavedSearchStore(self.store.db_path)
+        reopened.init()
+        self.assertEqual(reopened.get(self.search["id"])["fetch_failure"], "local")
+        search = dict(reopened.get(self.search["id"]), fetch_before=True)
+        with patch("git_info.core.sync.fetch_all", side_effect=subprocess.TimeoutExpired("git", 1)), \
+                patch("builtins.print"):
+            self.assertEqual(_sync(self.store, [search], True), 1)
+
+    def test_fetch_disabled_does_not_use_failure_policy(self):
+        with patch("git_info.core.sync.fetch_all") as fetch:
+            run_saved_search(self.store, dict(self.search, fetch_failure="local"), force=True)
+        fetch.assert_not_called()
+
+    def test_existing_rows_migrate_to_stop(self):
+        self.store._execute("ALTER TABLE saved_searches DROP COLUMN fetch_failure")
+        self.store.init()
+        self.assertEqual(self.store.get(self.search["id"])["fetch_failure"], "stop")
 
 
 if __name__ == "__main__":
